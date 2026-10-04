@@ -290,7 +290,7 @@ pub fn run() {
             Ok(())
         })
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![select_root, list_directory, move_video_to_trash, duplicate::duplicate_video, inspect_video, prepare_preview, editor::prepare_edit, editor::video_frame_times, editor::export_edit])
+        .invoke_handler(tauri::generate_handler![select_root, list_directory, move_video_to_trash, duplicate::duplicate_video, inspect_video, prepare_preview, editor::prepare_edit, editor::video_frame_times, editor::export::export_edit])
         .run(tauri::generate_context!())
         .expect("error while building Tauri application");
 }

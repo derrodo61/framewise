@@ -26,6 +26,8 @@ npm install
 npm run tauri dev
 ```
 
+Run `npm test` for frame navigation and `cargo test --manifest-path src-tauri/Cargo.toml` for Rust checks, including real FFmpeg exports. The Rust export tests require `ffmpeg` and `ffprobe` as described above.
+
 Build an installer on the target OS with `npm run tauri build`. Build and test on Windows, macOS, and Linux separately. The current prototype expects a local `ffprobe` installation; packaging it with the app is a later distribution step and requires checking the FFmpeg build's license terms.
 
 If `ffprobe` works in a new terminal but Framewise cannot find it, restart the terminal that launches `npm run tauri dev` so it picks up your updated `PATH`. On Windows, Framewise also looks in Windows Package Manager's FFmpeg installation folder. `FFPROBE_PATH` takes precedence over both locations.
