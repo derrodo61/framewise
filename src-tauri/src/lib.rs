@@ -115,6 +115,11 @@ fn inspect_video(path: String, state: tauri::State<'_, AppState>) -> Result<serd
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_window_state::Builder::default().build())?;
+            Ok(())
+        })
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![select_root, list_directory, inspect_video])
         .run(tauri::generate_context!())
