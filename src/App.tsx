@@ -406,7 +406,12 @@ function App() {
   function openFileMenu(file: FileEntry, x: number, y: number) {
     if (file.isDirectory || deleting) return
     if (selected?.path !== file.path) void selectFile(file)
-    setContextMenu({ file, x: Math.max(8, Math.min(x, window.innerWidth - 200)), y: Math.max(8, Math.min(y, window.innerHeight - 60)) })
+    setContextMenu({ file, x: Math.max(8, Math.min(x, window.innerWidth - 200)), y: Math.max(8, Math.min(y, window.innerHeight - 96)) })
+  }
+
+  function editFile(file: FileEntry) {
+    setContextMenu(null)
+    setEditingFile(file)
   }
 
   function fileContextMenu(event: MouseEvent<HTMLButtonElement>, file: FileEntry) {
@@ -605,7 +610,7 @@ function App() {
         {!inspectorCollapsed && (selected ? <div key={selected.path} className="details-body">
           <VideoPreview file={selected} />
           <div className="selected-file"><span className="selected-file-icon"><Icon name="film" size={27} /></span><div><strong title={selected.name}>{selected.name}</strong><span>{fileSize(selected.size)}</span></div></div>
-          {probe && video && <button className="inspector-edit" onClick={() => setEditingFile(selected)}>Edit video</button>}
+          {probe && video && <button className="inspector-edit" onClick={() => editFile(selected)}>Edit video</button>}
           {loading && <div className="notice">Reading video metadata…</div>}
           {error && <div className="notice error" role="alert"><Icon name="info" size={18} /><span>{error}</span><button onClick={() => setError(null)} aria-label="Dismiss error"><Icon name="close" size={15} /></button></div>}
           {probe && <>
@@ -625,6 +630,7 @@ function App() {
       {!inspectorCollapsed && <div className="column-resizer right-resizer" role="separator" tabIndex={0} aria-label="Resize inspector column" aria-orientation="vertical" aria-valuemin={MIN_INSPECTOR_WIDTH} aria-valuemax={widthLimits('right').max} aria-valuenow={effectiveInspectorWidth} onPointerDown={event => startResize('right', event)} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize} onKeyDown={event => resizeWithKeyboard('right', event)} />}
     </div>
     {contextMenu && <div ref={contextMenuRef} className="file-context-menu" role="menu" aria-label={`Actions for ${contextMenu.file.name}`} style={{ left: contextMenu.x, top: contextMenu.y }}>
+      <button className="edit-menu-item" role="menuitem" onClick={() => editFile(contextMenu.file)}>Edit video</button>
       <button role="menuitem" onClick={() => void moveFileToTrash(contextMenu.file)}>Move to Trash</button>
     </div>}
   </div>

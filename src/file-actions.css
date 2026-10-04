@@ -24,6 +24,9 @@
 
 .file-context-menu button:hover,
 .file-context-menu button:focus-visible { background: #fff1f1; }
+.file-context-menu .edit-menu-item { color: #245fc4; }
+.file-context-menu .edit-menu-item:hover,
+.file-context-menu .edit-menu-item:focus-visible { background: #eaf2ff; }
 
 .file-action {
   padding: 10px 17px;
@@ -39,5 +42,8 @@
 [data-theme='dark'] .file-context-menu button { color: #ffb9c4; }
 [data-theme='dark'] .file-context-menu button:hover,
 [data-theme='dark'] .file-context-menu button:focus-visible { background: #452b35; }
+[data-theme='dark'] .file-context-menu .edit-menu-item { color: #b7d1ff; }
+[data-theme='dark'] .file-context-menu .edit-menu-item:hover,
+[data-theme='dark'] .file-context-menu .edit-menu-item:focus-visible { background: #253b59; }
 [data-theme='dark'] .file-action { border-color: #2e5945; background: #203c2f; color: #9de1b5; }
 [data-theme='dark'] .file-action.error { border-color: #66404a; background: #452b35; color: #ffb9c4; }
