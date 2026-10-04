@@ -18,6 +18,7 @@ import './file-actions.css'
 type FileEntry = { name: string; path: string; isDirectory: boolean; size: number | null }
 type DirectoryListing = { path: string; parent: string | null; entries: FileEntry[] }
 type DuplicateResult = { listing: DirectoryListing; duplicatedPath: string }
+type RenameResult = { listing: DirectoryListing; renamedPath: string }
 type ProbeStream = {
   index?: number; codec_type?: string; codec_name?: string; profile?: string
   width?: number; height?: number; r_frame_rate?: string; avg_frame_rate?: string
@@ -165,6 +166,10 @@ function App() {
   const [fileAction, setFileAction] = useState<{ message: string; error: boolean } | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [duplicatingFile, setDuplicatingFile] = useState<string | null>(null)
+  const [renameTarget, setRenameTarget] = useState<FileEntry | null>(null)
+  const [renameStem, setRenameStem] = useState('')
+  const [renameError, setRenameError] = useState<string | null>(null)
+  const [renaming, setRenaming] = useState(false)
   const [view, setView] = useState<'media' | 'settings'>('media')
   const [theme, setTheme] = useState<'light' | 'dark'>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
   const [defaultFolder, setDefaultFolder] = useState<string | null>(() => window.localStorage.getItem('framewise.defaultFolder'))
@@ -406,9 +411,9 @@ function App() {
   }
 
   function openFileMenu(file: FileEntry, x: number, y: number) {
-    if (file.isDirectory || deleting || duplicatingFile) return
+    if (file.isDirectory || deleting || duplicatingFile || renaming || renameTarget) return
     if (selected?.path !== file.path) void selectFile(file)
-    setContextMenu({ file, x: Math.max(8, Math.min(x, window.innerWidth - 200)), y: Math.max(8, Math.min(y, window.innerHeight - 132)) })
+    setContextMenu({ file, x: Math.max(8, Math.min(x, window.innerWidth - 200)), y: Math.max(8, Math.min(y, window.innerHeight - 176)) })
   }
 
   function editFile(file: FileEntry) {
@@ -439,6 +444,45 @@ function App() {
     } catch (cause) {
       setFileAction({ message: reportError('Duplicating video', cause), error: true })
     } finally { setDuplicatingFile(null) }
+  }
+
+  function openRename(file: FileEntry) {
+    setContextMenu(null)
+    setRenameTarget(file)
+    setRenameStem(file.name.slice(0, file.name.lastIndexOf('.')))
+    setRenameError(null)
+  }
+
+  function closeRename() {
+    if (renaming) return
+    const path = renameTarget?.path
+    setRenameTarget(null)
+    window.requestAnimationFrame(() => {
+      Array.from(fileListRef.current?.querySelectorAll<HTMLButtonElement>('[data-list-row]') ?? [])
+        .find(row => row.dataset.path === path)?.focus()
+    })
+  }
+
+  async function renameFile() {
+    const file = renameTarget
+    if (!file || renaming) return
+    setRenaming(true)
+    setRenameError(null)
+    const currentRequest = ++requestId.current
+    flushSync(() => { setSelected(null); setProbe(null); setError(null); setLoading(false) })
+    try {
+      const result = await invoke<RenameResult>('rename_video', { path: file.path, newStem: renameStem })
+      if (currentRequest !== requestId.current) return
+      const renamed = result.listing.entries.find(entry => entry.path === result.renamedPath)
+      pendingFocus.current = { path: result.renamedPath }
+      setListing(result.listing)
+      setRenameTarget(null)
+      setFileAction({ message: `Renamed “${file.name}” to “${renamed?.name ?? renameStem}”.`, error: false })
+      if (renamed) void selectFile(renamed)
+    } catch (cause) {
+      setRenameError(reportError('Renaming video', cause))
+      void selectFile(file)
+    } finally { setRenaming(false) }
   }
 
   async function moveFileToTrash(file: FileEntry) {
@@ -659,8 +703,18 @@ function App() {
     </div>
     {contextMenu && <div ref={contextMenuRef} className="file-context-menu" role="menu" aria-label={`Actions for ${contextMenu.file.name}`} style={{ left: contextMenu.x, top: contextMenu.y }}>
       <button className="edit-menu-item" role="menuitem" onClick={() => editFile(contextMenu.file)}>Edit video</button>
+      <button className="rename-menu-item" role="menuitem" onClick={() => openRename(contextMenu.file)}>Rename</button>
       <button className="duplicate-menu-item" role="menuitem" onClick={() => void duplicateFile(contextMenu.file)}>Duplicate</button>
       <button role="menuitem" onClick={() => void moveFileToTrash(contextMenu.file)}>Move to Trash</button>
+    </div>}
+    {renameTarget && <div className="rename-backdrop">
+      <form className="rename-dialog" role="dialog" aria-modal="true" aria-labelledby="rename-title" onSubmit={event => { event.preventDefault(); void renameFile() }} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); closeRename() } }}>
+        <h2 id="rename-title">Rename video</h2>
+        <label htmlFor="rename-name">File name</label>
+        <div className="rename-name-field"><input id="rename-name" autoFocus value={renameStem} onFocus={event => event.currentTarget.select()} onChange={event => setRenameStem(event.target.value)} disabled={renaming} /><span>{renameTarget.name.slice(renameTarget.name.lastIndexOf('.'))}</span></div>
+        {renameError && <p className="rename-error" role="alert">{renameError}</p>}
+        <div className="rename-actions"><button type="button" onClick={closeRename} disabled={renaming}>Cancel</button><button type="submit" disabled={renaming || !renameStem.trim() || renameStem === renameTarget.name.slice(0, renameTarget.name.lastIndexOf('.'))}>{renaming ? 'Renaming…' : 'Rename'}</button></div>
+      </form>
     </div>}
   </div>
 }

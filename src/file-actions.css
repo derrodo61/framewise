@@ -25,11 +25,28 @@
 .file-context-menu button:hover,
 .file-context-menu button:focus-visible { background: #fff1f1; }
 .file-context-menu .edit-menu-item,
+.file-context-menu .rename-menu-item,
 .file-context-menu .duplicate-menu-item { color: #245fc4; }
 .file-context-menu .edit-menu-item:hover,
 .file-context-menu .edit-menu-item:focus-visible,
+.file-context-menu .rename-menu-item:hover,
+.file-context-menu .rename-menu-item:focus-visible,
 .file-context-menu .duplicate-menu-item:hover,
 .file-context-menu .duplicate-menu-item:focus-visible { background: #eaf2ff; }
+
+.rename-backdrop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 20px; background: #0f172a99; }
+.rename-dialog { width: min(100%, 400px); padding: 22px; border: 1px solid #dfe6ef; border-radius: 12px; background: #fff; box-shadow: 0 16px 48px #0f172a45; }
+.rename-dialog h2 { margin: 0 0 18px; color: #202b3a; font-size: 18px; }
+.rename-dialog label { display: block; margin-bottom: 7px; color: #526780; font-size: 12px; font-weight: 700; }
+.rename-name-field { display: flex; align-items: center; border: 1px solid #cbd5e1; border-radius: 7px; overflow: hidden; }
+.rename-name-field:focus-within { border-color: #2563eb; outline: 2px solid #2563eb33; }
+.rename-name-field input { flex: 1; min-width: 0; padding: 10px 11px; border: 0; outline: 0; color: #202b3a; background: transparent; font: inherit; font-size: 13px; }
+.rename-name-field span { padding: 0 11px; color: #64748b; font-size: 13px; }
+.rename-error { margin: 10px 0 0; color: #a43f45; font-size: 12px; }
+.rename-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
+.rename-actions button { padding: 9px 15px; border: 1px solid #dce4ee; border-radius: 7px; background: #fff; color: #526780; font-size: 12px; font-weight: 700; }
+.rename-actions button[type='submit'] { border-color: #2563eb; background: #2563eb; color: #fff; }
+.rename-actions button:disabled { opacity: .5; cursor: not-allowed; }
 
 .file-action {
   padding: 10px 17px;
@@ -47,11 +64,22 @@
 [data-theme='dark'] .file-context-menu button:hover,
 [data-theme='dark'] .file-context-menu button:focus-visible { background: #452b35; }
 [data-theme='dark'] .file-context-menu .edit-menu-item,
+[data-theme='dark'] .file-context-menu .rename-menu-item,
 [data-theme='dark'] .file-context-menu .duplicate-menu-item { color: #b7d1ff; }
 [data-theme='dark'] .file-context-menu .edit-menu-item:hover,
 [data-theme='dark'] .file-context-menu .edit-menu-item:focus-visible,
+[data-theme='dark'] .file-context-menu .rename-menu-item:hover,
+[data-theme='dark'] .file-context-menu .rename-menu-item:focus-visible,
 [data-theme='dark'] .file-context-menu .duplicate-menu-item:hover,
 [data-theme='dark'] .file-context-menu .duplicate-menu-item:focus-visible { background: #253b59; }
+[data-theme='dark'] .rename-dialog { border-color: #3a485c; background: #1b2432; }
+[data-theme='dark'] .rename-dialog h2 { color: #e8eef8; }
+[data-theme='dark'] .rename-dialog label,[data-theme='dark'] .rename-name-field span { color: #a4b2c6; }
+[data-theme='dark'] .rename-name-field { border-color: #3a485c; }
+[data-theme='dark'] .rename-name-field input { color: #e8eef8; }
+[data-theme='dark'] .rename-actions button { border-color: #3a485c; background: #202d3e; color: #c8d5e6; }
+[data-theme='dark'] .rename-actions button[type='submit'] { border-color: #2563eb; background: #2563eb; color: #fff; }
+[data-theme='dark'] .rename-error { color: #ffb9c4; }
 [data-theme='dark'] .file-action { border-color: #2e5945; background: #203c2f; color: #9de1b5; }
 [data-theme='dark'] .file-action.error { border-color: #66404a; background: #452b35; color: #ffb9c4; }
 [data-theme='dark'] .file-action.progress { border-color: #345f9e; background: #253b59; color: #b7d1ff; }
