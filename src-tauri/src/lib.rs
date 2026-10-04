@@ -6,6 +6,7 @@ mod duplicate;
 mod rename;
 mod move_files;
 mod preferences;
+mod preview_index;
 #[cfg(desktop)]
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
@@ -145,13 +146,18 @@ async fn move_videos_to_trash(paths: Vec<String>, state: tauri::State<'_, AppSta
     }
     let parent = parent.ok_or("Cannot find the videos' folder")?;
     tauri::async_runtime::spawn_blocking(move || {
+        let preview_names: Vec<_> = files.iter().map(|file| thumbnail_name(file)).collect();
         let error = trash::delete_all(&files).err().map(|cause| {
             log::error!("Could not move every video to Trash: {cause}");
             format!("Could not move every video to Trash: {cause}")
         });
-        let moved_count = files.iter().filter(|path| {
-            matches!(fs::symlink_metadata(path), Err(cause) if cause.kind() == io::ErrorKind::NotFound)
-        }).count();
+        let mut moved_count = 0;
+        for (file, preview_name) in files.iter().zip(preview_names) {
+            if matches!(fs::symlink_metadata(file), Err(cause) if cause.kind() == io::ErrorKind::NotFound) {
+                moved_count += 1;
+                forget_video_preview(file, preview_name.as_deref());
+            }
+        }
         let listing = list_folder(&parent, &root)?;
         Ok(TrashBatchResult { listing, moved_count, error })
     }).await.map_err(|error| format!("Trash operation failed: {error}"))?
@@ -170,11 +176,13 @@ fn move_folder_to_trash(path: String, state: tauri::State<'_, AppState>) -> Resu
     if resolved == root {
         return Err("The selected media folder cannot be moved to Trash.".into());
     }
+    let preview_names = video_preview_names_in_folder(&resolved);
     let parent = resolved.parent().ok_or("Cannot find the folder's parent")?;
     trash::delete(&resolved).map_err(|error| {
         log::error!("Could not move folder to Trash: {error}");
         format!("Could not move folder to Trash: {error}")
     })?;
+    forget_folder_previews(&resolved, &preview_names);
     list_folder(parent, &root)
 }
 
@@ -279,13 +287,133 @@ fn run_ffmpeg(video: &Path, thumbnail: &Path, seek: &str) -> io::Result<Output> 
     }
 }
 
-fn thumbnail_name(video: &Path) -> Option<String> {
+pub(crate) fn thumbnail_name(video: &Path) -> Option<String> {
     let metadata = fs::metadata(video).ok()?;
     let mut hash = DefaultHasher::new();
     video.hash(&mut hash);
     metadata.len().hash(&mut hash);
     metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_nanos().hash(&mut hash);
     Some(format!("{:016x}", hash.finish()))
+}
+
+fn thumbnail_version(video: &Path) -> Option<String> {
+    let metadata = fs::metadata(video).ok()?;
+    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_nanos();
+    Some(format!("{}:{modified}", metadata.len()))
+}
+
+fn video_preview_names_in_folder(folder: &Path) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut folders = vec![folder.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        let entries = match fs::read_dir(&folder) {
+            Ok(entries) => entries,
+            Err(error) => { log::warn!("Could not scan folder for cached previews: {error}"); continue; }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => { log::warn!("Could not scan a folder entry for cached previews: {error}"); continue; }
+            };
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(error) => { log::warn!("Could not identify a file while scanning cached previews: {error}"); continue; }
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            let path = entry.path();
+            if file_type.is_dir() {
+                folders.push(path);
+            } else if file_type.is_file() && video_file(&path)
+                && let Some(name) = thumbnail_name(&path)
+            {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
+fn remove_preview_images(name: &str) {
+    let directory = match preview_cache_dir() {
+        Ok(directory) => directory,
+        Err(error) => { log::warn!("Could not locate preview cache for cleanup: {error}"); return; }
+    };
+    for extension in ["png", "jpg"] {
+        let image = directory.join(format!("{name}.{extension}"));
+        if let Err(error) = fs::remove_file(&image)
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            log::warn!("Could not remove cached preview {}: {error}", image.display());
+        }
+    }
+}
+
+fn remove_indexed_image(image_name: &str) {
+    let image = Path::new(image_name);
+    if !preview_filename(image) || image.file_name().is_none_or(|name| name != image_name) {
+        log::warn!("Ignoring invalid preview filename in index: {image_name}");
+        return;
+    }
+    let Ok(directory) = preview_cache_dir() else { return; };
+    let path = directory.join(image_name);
+    if let Err(error) = fs::remove_file(&path)
+        && error.kind() != io::ErrorKind::NotFound
+    {
+        log::warn!("Could not remove cached preview {}: {error}", path.display());
+    }
+}
+
+pub(crate) fn forget_video_preview(video: &Path, legacy_name: Option<&str>) {
+    match preview_index::forget(video) {
+        Ok(Some(image)) => remove_indexed_image(&image),
+        Ok(None) => {}
+        Err(error) => log::warn!("Could not update preview index after deleting video: {error}"),
+    }
+    if let Some(name) = legacy_name {
+        remove_preview_images(name);
+    }
+}
+
+fn forget_folder_previews(folder: &Path, legacy_names: &[String]) {
+    match preview_index::forget_folder(folder) {
+        Ok(images) => { for image in images { remove_indexed_image(&image); } }
+        Err(error) => log::warn!("Could not update preview index after deleting folder: {error}"),
+    }
+    for name in legacy_names {
+        remove_preview_images(name);
+    }
+}
+
+pub(crate) fn relocate_video_preview(old: &Path, new: &Path, legacy_name: Option<&str>) {
+    match preview_index::relocate(old, new) {
+        Ok(Some(displaced)) => remove_indexed_image(&displaced),
+        Ok(None) => {}
+        Err(error) => { log::warn!("Could not update preview index after moving video: {error}"); return; }
+    }
+    if let (Some(name), Some(version)) = (legacy_name, thumbnail_version(new)) {
+        let indexed = preview_index::find(new).ok().flatten();
+        if indexed.is_none() {
+            let Ok(directory) = preview_cache_dir() else { return; };
+            for extension in ["png", "jpg"] {
+                let image_name = format!("{name}.{extension}");
+                if valid_thumbnail(&directory.join(&image_name)) {
+                    if let Err(error) = preview_index::record(new, &version, &image_name) {
+                        log::warn!("Could not index moved video preview: {error}");
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn relocate_folder_previews(old: &Path, new: &Path) {
+    match preview_index::relocate_folder(old, new) {
+        Ok(displaced) => { for image in displaced { remove_indexed_image(&image); } }
+        Err(error) => log::warn!("Could not update preview index after moving folder: {error}"),
+    }
 }
 
 fn preview_cache_dir() -> Result<PathBuf, String> {
@@ -362,11 +490,33 @@ fn migrate_preview_cache(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 fn existing_thumbnail(video: &Path, app: &tauri::AppHandle) -> Option<PathBuf> {
+    let version = thumbnail_version(video)?;
+    match preview_index::find(video) {
+        Ok(Some(entry)) => {
+            let image = Path::new(&entry.image_name);
+            if entry.version == version && preview_filename(image)
+                && image.file_name().and_then(|name| name.to_str()) == Some(entry.image_name.as_str())
+            {
+                let target = preview_cache_dir().ok()?.join(&entry.image_name);
+                if valid_thumbnail(&target) {
+                    return Some(target);
+                }
+            }
+            match preview_index::forget(video) {
+                Ok(Some(old)) => remove_indexed_image(&old),
+                Ok(None) => {}
+                Err(error) => log::warn!("Could not clear outdated preview index entry: {error}"),
+            }
+        }
+        Ok(None) => {}
+        Err(error) => log::warn!("Could not read preview index: {error}"),
+    }
     let name = thumbnail_name(video)?;
     let directory = preview_cache_dir().ok()?;
     for extension in ["png", "jpg"] {
         let target = directory.join(format!("{name}.{extension}"));
         if valid_thumbnail(&target) {
+            register_thumbnail(video, &version, &target);
             return Some(target);
         }
     }
@@ -381,9 +531,23 @@ fn existing_thumbnail(video: &Path, app: &tauri::AppHandle) -> Option<PathBuf> {
             log::warn!("Could not move cached preview into .framewise: {error}");
             return Some(old);
         }
+        register_thumbnail(video, &version, &target);
         return Some(target);
     }
     None
+}
+
+fn register_thumbnail(video: &Path, version: &str, thumbnail: &Path) {
+    let Ok(directory) = preview_cache_dir() else { return; };
+    if thumbnail.parent() != Some(directory.as_path()) {
+        return;
+    }
+    let Some(image_name) = thumbnail.file_name().and_then(|name| name.to_str()) else { return; };
+    match preview_index::record(video, version, image_name) {
+        Ok(Some(old)) => remove_indexed_image(&old),
+        Ok(None) => {}
+        Err(error) => log::warn!("Could not index video preview: {error}"),
+    }
 }
 
 #[tauri::command]
@@ -391,10 +555,16 @@ fn preview_cache_directory() -> Result<String, String> {
     Ok(ensure_preview_cache_dir()?.to_string_lossy().into_owned())
 }
 
+#[tauri::command]
+fn preview_index_location() -> Result<String, String> {
+    Ok(preview_index::database_path()?.to_string_lossy().into_owned())
+}
+
 fn create_thumbnail(video: &Path, app: &tauri::AppHandle) -> Option<PathBuf> {
     if let Some(thumbnail) = existing_thumbnail(video, app) {
         return Some(thumbnail);
     }
+    let version = thumbnail_version(video)?;
     let thumbnail = preview_cache_dir().ok()?.join(format!("{}.png", thumbnail_name(video)?));
     if let Err(error) = fs::create_dir_all(thumbnail.parent()?) {
         log::warn!("Could not create preview cache: {error}");
@@ -402,7 +572,14 @@ fn create_thumbnail(video: &Path, app: &tauri::AppHandle) -> Option<PathBuf> {
     }
     for seek in ["1", "0"] {
         match run_ffmpeg(video, &thumbnail, seek) {
-            Ok(output) if output.status.success() && thumbnail.metadata().is_ok_and(|file| file.len() > 0) => return Some(thumbnail),
+            Ok(output) if output.status.success() && thumbnail.metadata().is_ok_and(|file| file.len() > 0) => {
+                if thumbnail_version(video).as_deref() != Some(version.as_str()) {
+                    let _ = fs::remove_file(&thumbnail);
+                    return None;
+                }
+                register_thumbnail(video, &version, &thumbnail);
+                return Some(thumbnail);
+            }
             Ok(output) => log::warn!("Could not create video thumbnail: {}", String::from_utf8_lossy(&output.stderr).trim()),
             Err(error) => { log::warn!("Could not start ffmpeg for thumbnail: {error}"); break; }
         }
@@ -480,11 +657,14 @@ pub fn run() {
             } else if let Err(error) = migrate_preview_cache(app.handle()) {
                 log::warn!("Could not migrate previous preview cache: {error}");
             }
+            if let Err(error) = preview_index::initialize() {
+                log::error!("Could not prepare preview index: {error}");
+            }
             Ok(())
         })
         .manage(AppState::default())
         .manage(move_files::MoveState::default())
-        .invoke_handler(tauri::generate_handler![select_root, list_directory, move_videos_to_trash, move_folder_to_trash, duplicate::duplicate_video, rename::rename_video, rename::rename_folder, move_files::begin_move, move_files::move_session, move_files::list_move_directory, move_files::create_move_folder, move_files::create_media_folder, move_files::move_selected, preferences::load_preferences, preferences::save_preferences, inspect_video, prepare_preview, generate_preview_thumbnail, preview_cache_directory, editor::prepare_edit, editor::video_frame_times, editor::export::export_edit])
+        .invoke_handler(tauri::generate_handler![select_root, list_directory, move_videos_to_trash, move_folder_to_trash, duplicate::duplicate_video, rename::rename_video, rename::rename_folder, move_files::begin_move, move_files::move_session, move_files::list_move_directory, move_files::create_move_folder, move_files::create_media_folder, move_files::move_selected, preferences::load_preferences, preferences::save_preferences, inspect_video, prepare_preview, generate_preview_thumbnail, preview_cache_directory, preview_index_location, editor::prepare_edit, editor::video_frame_times, editor::export::export_edit])
         .run(tauri::generate_context!())
         .expect("error while building Tauri application");
 }

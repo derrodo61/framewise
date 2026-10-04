@@ -9,8 +9,8 @@ use std::{
 use tauri::Emitter;
 
 use crate::{
-    AppState, DirectoryListing, list_folder, rename::valid_stem, selected_root, video_file,
-    within_root,
+    AppState, DirectoryListing, list_folder, relocate_video_preview, rename::valid_stem,
+    selected_root, thumbnail_name, video_file, within_root,
 };
 
 #[derive(Clone, Default)]
@@ -312,7 +312,13 @@ pub(crate) async fn move_selected(
                 return Err("A selected file is outside the chosen folder.".into());
             }
         }
+        let legacy_names: Vec<_> = session.sources.iter().map(|source| thumbnail_name(source)).collect();
         move_paths(&session.sources, &destination)?;
+        for (source, legacy_name) in session.sources.iter().zip(legacy_names) {
+            if let Some(file_name) = source.file_name() {
+                relocate_video_preview(source, &destination.join(file_name), legacy_name.as_deref());
+            }
+        }
         let result = MoveResult {
             count: session.sources.len(),
             source_folder: session.source_folder.to_string_lossy().into_owned(),

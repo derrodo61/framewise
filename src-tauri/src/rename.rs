@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{AppState, DirectoryListing, list_folder, selected_root, video_file, within_root};
+use crate::{AppState, DirectoryListing, list_folder, relocate_folder_previews, relocate_video_preview, selected_root, thumbnail_name, video_file, within_root};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -119,7 +119,9 @@ pub(crate) async fn rename_video(
         return Err("Select a supported video file".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
+        let legacy_name = thumbnail_name(&source);
         let renamed = rename_file(&source, &new_stem)?;
+        relocate_video_preview(&source, &renamed, legacy_name.as_deref());
         let folder = source.parent().ok_or("Cannot find the video's folder")?;
         Ok(RenameResult {
             listing: list_folder(folder, &root)?,
@@ -149,6 +151,7 @@ pub(crate) async fn rename_folder(
     }
     tauri::async_runtime::spawn_blocking(move || {
         let renamed = rename_directory(&source, &new_name)?;
+        relocate_folder_previews(&source, &renamed);
         let parent = source.parent().ok_or("Cannot find the folder's parent")?;
         Ok(RenameResult {
             listing: list_folder(parent, &root)?,

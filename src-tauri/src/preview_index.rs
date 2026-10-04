@@ -1,0 +1,203 @@
+use std::{fs, path::{Path, PathBuf}, time::Duration};
+
+use rusqlite::{Connection, OptionalExtension, params};
+
+use crate::preferences;
+
+pub(crate) struct Entry {
+    pub version: String,
+    pub image_name: String,
+}
+
+pub(crate) fn database_path() -> Result<PathBuf, String> {
+    Ok(preferences::settings_dir()?.join("framewise.db"))
+}
+
+fn path_text(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+fn open_at(path: &Path) -> Result<Connection, String> {
+    fs::create_dir_all(path.parent().ok_or("Cannot locate Framewise database folder")?)
+        .map_err(|error| format!("Cannot create Framewise database folder: {error}"))?;
+    let connection = Connection::open(path)
+        .map_err(|error| format!("Cannot open Framewise database: {error}"))?;
+    connection.busy_timeout(Duration::from_secs(3))
+        .map_err(|error| format!("Cannot configure Framewise database: {error}"))?;
+    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(|error| format!("Cannot read Framewise database version: {error}"))?;
+    if version != 0 && version != 1 {
+        return Err(format!("Unsupported Framewise database version: {version}"));
+    }
+    if version == 0 {
+        connection.execute_batch("PRAGMA journal_mode=WAL;
+            CREATE TABLE IF NOT EXISTS previews (
+                video_path TEXT PRIMARY KEY NOT NULL,
+                version TEXT NOT NULL,
+                image_name TEXT NOT NULL
+            );
+            PRAGMA user_version=1;")
+            .map_err(|error| format!("Cannot initialize Framewise database: {error}"))?;
+    }
+    Ok(connection)
+}
+
+fn open() -> Result<Connection, String> {
+    open_at(&database_path()?)
+}
+
+pub(crate) fn initialize() -> Result<(), String> {
+    open().map(|_| ())
+}
+
+fn find_on(connection: &Connection, video: &Path) -> rusqlite::Result<Option<Entry>> {
+    connection.query_row(
+        "SELECT version, image_name FROM previews WHERE video_path = ?1",
+        [path_text(video)],
+        |row| Ok(Entry { version: row.get(0)?, image_name: row.get(1)? }),
+    ).optional()
+}
+
+pub(crate) fn find(video: &Path) -> Result<Option<Entry>, String> {
+    find_on(&open()?, video).map_err(|error| format!("Cannot read preview index: {error}"))
+}
+
+pub(crate) fn record(video: &Path, version: &str, image_name: &str) -> Result<Option<String>, String> {
+    let mut connection = open()?;
+    record_on(&mut connection, video, version, image_name)
+}
+
+fn record_on(connection: &mut Connection, video: &Path, version: &str, image_name: &str) -> Result<Option<String>, String> {
+    let transaction = connection.transaction()
+        .map_err(|error| format!("Cannot update preview index: {error}"))?;
+    let previous = find_on(&transaction, video)
+        .map_err(|error| format!("Cannot read preview index: {error}"))?;
+    transaction.execute(
+        "INSERT INTO previews (video_path, version, image_name) VALUES (?1, ?2, ?3)
+         ON CONFLICT(video_path) DO UPDATE SET version = excluded.version, image_name = excluded.image_name",
+        params![path_text(video), version, image_name],
+    ).map_err(|error| format!("Cannot save preview index: {error}"))?;
+    transaction.commit().map_err(|error| format!("Cannot save preview index: {error}"))?;
+    Ok(previous.map(|entry| entry.image_name).filter(|old| old != image_name))
+}
+
+pub(crate) fn forget(video: &Path) -> Result<Option<String>, String> {
+    let mut connection = open()?;
+    forget_on(&mut connection, video)
+}
+
+fn forget_on(connection: &mut Connection, video: &Path) -> Result<Option<String>, String> {
+    let transaction = connection.transaction()
+        .map_err(|error| format!("Cannot update preview index: {error}"))?;
+    let previous = find_on(&transaction, video)
+        .map_err(|error| format!("Cannot read preview index: {error}"))?;
+    transaction.execute("DELETE FROM previews WHERE video_path = ?1", [path_text(video)])
+        .map_err(|error| format!("Cannot remove preview index entry: {error}"))?;
+    transaction.commit().map_err(|error| format!("Cannot remove preview index entry: {error}"))?;
+    Ok(previous.map(|entry| entry.image_name))
+}
+
+pub(crate) fn relocate(old: &Path, new: &Path) -> Result<Option<String>, String> {
+    let mut connection = open()?;
+    relocate_on(&mut connection, old, new)
+}
+
+fn relocate_on(connection: &mut Connection, old: &Path, new: &Path) -> Result<Option<String>, String> {
+    let transaction = connection.transaction()
+        .map_err(|error| format!("Cannot update preview index: {error}"))?;
+    let replaced = find_on(&transaction, new)
+        .map_err(|error| format!("Cannot read preview index: {error}"))?;
+    transaction.execute("DELETE FROM previews WHERE video_path = ?1", [path_text(new)])
+        .map_err(|error| format!("Cannot update preview index: {error}"))?;
+    transaction.execute("UPDATE previews SET video_path = ?1 WHERE video_path = ?2", params![path_text(new), path_text(old)])
+        .map_err(|error| format!("Cannot update preview index: {error}"))?;
+    transaction.commit().map_err(|error| format!("Cannot update preview index: {error}"))?;
+    Ok(replaced.map(|entry| entry.image_name))
+}
+
+fn entries_under(connection: &Connection, folder: &Path) -> Result<Vec<(PathBuf, String)>, String> {
+    let mut statement = connection.prepare("SELECT video_path, image_name FROM previews")
+        .map_err(|error| format!("Cannot read preview index: {error}"))?;
+    let rows = statement.query_map([], |row| Ok((PathBuf::from(row.get::<_, String>(0)?), row.get::<_, String>(1)?)))
+        .map_err(|error| format!("Cannot read preview index: {error}"))?;
+    rows.map(|row| row.map_err(|error| format!("Cannot read preview index: {error}")))
+        .filter(|row| match row { Ok((path, _)) => path.starts_with(folder), Err(_) => true })
+        .collect()
+}
+
+pub(crate) fn forget_folder(folder: &Path) -> Result<Vec<String>, String> {
+    let mut connection = open()?;
+    forget_folder_on(&mut connection, folder)
+}
+
+fn forget_folder_on(connection: &mut Connection, folder: &Path) -> Result<Vec<String>, String> {
+    let entries = entries_under(connection, folder)?;
+    let transaction = connection.transaction()
+        .map_err(|error| format!("Cannot update preview index: {error}"))?;
+    for (path, _) in &entries {
+        transaction.execute("DELETE FROM previews WHERE video_path = ?1", [path_text(path)])
+            .map_err(|error| format!("Cannot remove preview index entries: {error}"))?;
+    }
+    transaction.commit().map_err(|error| format!("Cannot remove preview index entries: {error}"))?;
+    Ok(entries.into_iter().map(|(_, image)| image).collect())
+}
+
+pub(crate) fn relocate_folder(old: &Path, new: &Path) -> Result<Vec<String>, String> {
+    let mut connection = open()?;
+    relocate_folder_on(&mut connection, old, new)
+}
+
+fn relocate_folder_on(connection: &mut Connection, old: &Path, new: &Path) -> Result<Vec<String>, String> {
+    let entries = entries_under(connection, old)?;
+    let transaction = connection.transaction()
+        .map_err(|error| format!("Cannot update preview index: {error}"))?;
+    let mut displaced = Vec::new();
+    for (source, _) in entries {
+        let target = new.join(source.strip_prefix(old).map_err(|error| error.to_string())?);
+        if let Some(entry) = find_on(&transaction, &target)
+            .map_err(|error| format!("Cannot read preview index: {error}"))?
+        {
+            displaced.push(entry.image_name);
+        }
+        transaction.execute("DELETE FROM previews WHERE video_path = ?1", [path_text(&target)])
+            .map_err(|error| format!("Cannot update preview index: {error}"))?;
+        transaction.execute("UPDATE previews SET video_path = ?1 WHERE video_path = ?2", params![path_text(&target), path_text(&source)])
+            .map_err(|error| format!("Cannot update preview index: {error}"))?;
+    }
+    transaction.commit().map_err(|error| format!("Cannot update preview index: {error}"))?;
+    Ok(displaced)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{find_on, forget_folder_on, forget_on, open_at, record_on, relocate_folder_on, relocate_on};
+    use std::{fs, time::{SystemTime, UNIX_EPOCH}};
+
+    #[test]
+    fn preview_index_tracks_versions_moves_and_deletions() {
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let folder = std::env::temp_dir().join(format!("framewise-preview-index-{}-{stamp}", std::process::id()));
+        let mut connection = open_at(&folder.join("framewise.db")).unwrap();
+        let source = folder.join("media").join("clip.mp4");
+        let renamed = folder.join("media").join("renamed.mp4");
+        let destination = folder.join("moved").join("renamed.mp4");
+        let old_image = "1111111111111111.png";
+        let new_image = "2222222222222222.png";
+
+        assert!(record_on(&mut connection, &source, "version-one", old_image).unwrap().is_none());
+        assert_eq!(find_on(&connection, &source).unwrap().unwrap().image_name, old_image);
+        assert_eq!(record_on(&mut connection, &source, "version-two", new_image).unwrap().as_deref(), Some(old_image));
+        assert!(relocate_on(&mut connection, &source, &renamed).unwrap().is_none());
+        assert!(find_on(&connection, &source).unwrap().is_none());
+        assert_eq!(find_on(&connection, &renamed).unwrap().unwrap().version, "version-two");
+        assert!(relocate_folder_on(&mut connection, &folder.join("media"), &folder.join("moved")).unwrap().is_empty());
+        assert!(find_on(&connection, &renamed).unwrap().is_none());
+        assert_eq!(find_on(&connection, &destination).unwrap().unwrap().image_name, new_image);
+        assert_eq!(forget_folder_on(&mut connection, &folder.join("moved")).unwrap(), vec![new_image]);
+        assert!(find_on(&connection, &destination).unwrap().is_none());
+        assert!(forget_on(&mut connection, &source).unwrap().is_none());
+
+        drop(connection);
+        fs::remove_dir_all(folder).unwrap();
+    }
+}

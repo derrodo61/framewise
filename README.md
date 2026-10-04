@@ -38,7 +38,7 @@ Build an installer on the target OS with `npm run tauri build`. Build and test o
 
 Framewise saves the startup folder, theme, panel layout, and window state in `~/.framewise` (`settings.json` and `window-state.json`). These files are shared by development and installed builds and remain in the user's home folder when the app is upgraded or uninstalled. On first launch, Framewise imports preferences from its earlier WebView storage and copies the previous window state when available.
 
-Video preview images are generated when needed and saved in `~/.framewise/previews`. On startup, Framewise moves previews from its earlier cache folder into this folder. You can delete the preview images to reclaim space; Framewise will regenerate them as needed. The exact folder path is shown in Settings.
+Video preview images are generated when needed and saved in `~/.framewise/previews`. A SQLite index at `~/.framewise/framewise.db` connects each video path and file version to its image. Existing images are added to the index when their videos are opened. On startup, Framewise moves previews from its earlier cache folder into `~/.framewise/previews`. You can delete preview images to reclaim space; Framewise will regenerate them as needed. Both locations are shown in Settings.
 
 If `ffprobe` works in a new terminal but Framewise cannot find it, restart the terminal that launches `npm run tauri dev` so it picks up your updated `PATH`. On Windows, Framewise also looks in Windows Package Manager's FFmpeg installation folder. `FFPROBE_PATH` takes precedence over both locations.
 

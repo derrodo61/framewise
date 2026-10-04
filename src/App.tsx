@@ -201,7 +201,9 @@ function App() {
   const [defaultFolder, setDefaultFolder] = useState<string | null>(() => getPreference('framewise.defaultFolder'))
   const [settingsError, setSettingsError] = useState<string | null>(null)
   const [previewCacheDirectory, setPreviewCacheDirectory] = useState<string | null>(null)
+  const [previewIndexLocation, setPreviewIndexLocation] = useState<string | null>(null)
   const [previewCacheError, setPreviewCacheError] = useState<string | null>(null)
+  const [previewIndexError, setPreviewIndexError] = useState<string | null>(null)
   const [startupLoading, setStartupLoading] = useState(() => Boolean(getPreference('framewise.defaultFolder')))
   const [workspaceCollapsed, setWorkspaceCollapsed] = useState(() => savedPanelState('framewise.workspaceCollapsed'))
   const [inspectorCollapsed, setInspectorCollapsed] = useState(() => savedPanelState('framewise.inspectorCollapsed'))
@@ -236,6 +238,9 @@ function App() {
     invoke<string>('preview_cache_directory')
       .then(path => { if (active) { setPreviewCacheDirectory(path); setPreviewCacheError(null) } })
       .catch(cause => { if (active) setPreviewCacheError(reportError('Locating preview cache', cause)) })
+    invoke<string>('preview_index_location')
+      .then(path => { if (active) { setPreviewIndexLocation(path); setPreviewIndexError(null) } })
+      .catch(cause => { if (active) setPreviewIndexError(reportError('Locating preview index', cause)) })
     return () => { active = false }
   }, [view])
 
@@ -782,8 +787,11 @@ function App() {
             <div className="settings-card-heading"><div className="settings-card-icon"><Icon name="film" size={22} /></div><div><h2 id="preview-cache-heading">Preview images</h2><p>Framewise creates a preview image when you select a video for the first time, then reuses it on later selections. If the video changes, a new image is created.</p></div></div>
             <div className="setting-label">CACHE FOLDER · READ ONLY</div>
             <div className={`setting-value ${previewCacheDirectory ? '' : 'empty'}`} title={previewCacheDirectory ? displayPath(previewCacheDirectory) : undefined}>{previewCacheDirectory ? displayPath(previewCacheDirectory) : previewCacheError ? 'Cache folder unavailable' : isTauri() ? 'Locating cache folder…' : 'Available in the desktop app'}</div>
+            <div className="setting-label">PREVIEW INDEX · READ ONLY</div>
+            <div className={`setting-value ${previewIndexLocation ? '' : 'empty'}`} title={previewIndexLocation ? displayPath(previewIndexLocation) : undefined}>{previewIndexLocation ? displayPath(previewIndexLocation) : previewIndexError ? 'Preview index unavailable' : isTauri() ? 'Locating preview index…' : 'Available in the desktop app'}</div>
             {previewCacheError && <div className="settings-error" role="alert"><Icon name="info" size={18} /><span>{previewCacheError}</span></div>}
-            <p className="settings-footnote">Preview images are stored in <code>.framewise/previews</code> alongside your preferences and window settings. They can be regenerated if deleted.</p>
+            {previewIndexError && <div className="settings-error" role="alert"><Icon name="info" size={18} /><span>{previewIndexError}</span></div>}
+            <p className="settings-footnote">Framewise keeps preview images in <code>.framewise/previews</code> and their video associations in <code>.framewise/framewise.db</code>. Images can be regenerated if deleted.</p>
           </section>
         </> : <>
         <div className="content-heading">

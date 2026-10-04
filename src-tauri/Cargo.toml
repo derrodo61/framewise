@@ -1,6 +1,6 @@
 [package]
 name = "framewise"
-version = "0.1.9"
+version = "0.1.11"
 description = "Local video metadata inspector"
 license = ""
 repository = ""
@@ -25,6 +25,7 @@ tauri-plugin-log = "2"
 log = "0.4"
 trash = "5.2.9"
 dirs = "7.0.0"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-window-state = "2.5.0"
