@@ -271,6 +271,34 @@ fn ffmpeg_candidates() -> Vec<PathBuf> {
     candidates
 }
 
+fn needs_metadata_keys(tags: &BTreeMap<String, String>) -> bool {
+    tags.keys().any(|key| {
+        ![
+            "major_brand",
+            "minor_version",
+            "compatible_brands",
+            "creation_time",
+            "title",
+            "comment",
+            "encoder",
+            "duration",
+            "bit_rate",
+            "number_of_frames",
+        ]
+        .iter()
+        .any(|standard| key.eq_ignore_ascii_case(standard))
+    })
+}
+
+fn preserved_tag(actual: Option<&String>, expected: &str, key: &str) -> bool {
+    actual.is_some_and(|value| {
+        value == expected
+            || (key.eq_ignore_ascii_case("creation_time")
+                && value.split(';').count() > 1
+                && value.split(';').all(|part| part == expected))
+    })
+}
+
 fn run_render(
     source: &Path,
     output: &Path,
@@ -322,10 +350,15 @@ fn run_render(
         if info.has_audio {
             command.args(["-c:a", "aac", "-b:a", "192k"]);
         }
+        let movflags = if needs_metadata_keys(&info.tags) {
+            "+faststart+use_metadata_tags"
+        } else {
+            "+faststart"
+        };
         command
             .args([
                 "-movflags",
-                "+faststart+use_metadata_tags",
+                movflags,
                 "-progress",
                 "pipe:2",
                 "-nostats",
@@ -428,7 +461,7 @@ fn verify_output(path: &Path, expected: f64, source: &MediaInfo) -> Result<(), S
         {
             continue;
         }
-        if result.tags.get(key) != Some(value) {
+        if !preserved_tag(result.tags.get(key), value, key) {
             return Err(format!(
                 "The output could not preserve the metadata tag “{key}”. The original was not changed."
             ));
@@ -574,7 +607,8 @@ pub(crate) async fn export_edit(
 
 #[cfg(test)]
 mod tests {
-    use super::{filter_graph, parse_frame_rate, validate_cut};
+    use super::{filter_graph, needs_metadata_keys, parse_frame_rate, preserved_tag, validate_cut};
+    use std::collections::BTreeMap;
 
     #[test]
     fn frame_rate_accepts_video_ratios_and_rejects_missing_rates() {
@@ -599,5 +633,33 @@ mod tests {
         assert!(graph.contains("[va][vb]concat=n=2:v=1:a=0[vout]"));
         assert!(graph.contains("[aa][ab]concat=n=2:v=0:a=1[aout]"));
         assert!(!filter_graph(0.0, 2.0, 10.0, false).contains("[aout]"));
+    }
+
+    #[test]
+    fn standard_mp4_tags_do_not_need_generic_metadata_keys() {
+        let mut tags = BTreeMap::from([
+            ("creation_time".into(), "2026-10-04T18:55:09.000000Z".into()),
+            ("title".into(), "Recording".into()),
+            ("comment".into(), "Captured with Snagit".into()),
+        ]);
+        assert!(!needs_metadata_keys(&tags));
+        tags.insert("camera_model".into(), "Example".into());
+        assert!(needs_metadata_keys(&tags));
+    }
+
+    #[test]
+    fn duplicate_mp4_creation_time_values_still_preserve_the_date() {
+        let expected = "2026-10-04T18:55:09.000000Z";
+        assert!(preserved_tag(Some(&expected.to_string()), expected, "creation_time"));
+        assert!(preserved_tag(
+            Some(&format!("{expected};{expected}")),
+            expected,
+            "creation_time"
+        ));
+        assert!(!preserved_tag(
+            Some(&format!("{expected};2026-10-05T18:55:09.000000Z")),
+            expected,
+            "creation_time"
+        ));
     }
 }
