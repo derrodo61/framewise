@@ -4,12 +4,13 @@ import { convertFileSrc, invoke, isTauri } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { ask, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { error as logError } from '@tauri-apps/plugin-log'
+import { adjacentFrameTime, frameIndexAt } from './frameNavigation'
 import { displayPath } from './paths'
 import './editor.css'
 
 type EditorFile = { name: string; path: string }
-type EditSource = { videoPath: string; duration: number; frameRate: number | null; frameCount: number | null; hasAudio: boolean; sourceSignature: string }
-export type EditResult = { outputPath: string; backupPath: string | null }
+type EditSource = { videoPath: string; duration: number; sourceSignature: string }
+export type EditResult = { outputPath: string; backupPath: string | null; metadataWarnings: string[] }
 type EditProgress = { source: string; percent: number }
 
 function timecode(seconds: number) {
@@ -27,6 +28,8 @@ function reportError(context: string, cause: unknown) {
 
 export default function Editor({ file, onExit, onSaved }: { file: EditorFile; onExit: (result: EditResult | null, replace: boolean) => void; onSaved: (result: EditResult) => void }) {
   const [source, setSource] = useState<EditSource | null>(null)
+  const [frameTimes, setFrameTimes] = useState<number[] | null>(null)
+  const [frameError, setFrameError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [savedResult, setSavedResult] = useState<EditResult | null>(null)
   const [videoMounted, setVideoMounted] = useState(true)
@@ -48,10 +51,17 @@ export default function Editor({ file, onExit, onSaved }: { file: EditorFile; on
     return () => { active = false }
   }, [file.path])
 
+  useEffect(() => {
+    if (!source) return
+    let active = true
+    invoke<number[]>('video_frame_times', { path: file.path, sourceSignature: source.sourceSignature })
+      .then(times => { if (active) setFrameTimes(times) })
+      .catch(cause => { if (active) setFrameError(reportError('Reading video frame times', cause)) })
+    return () => { active = false }
+  }, [file.path, source])
+
   const duration = source?.duration ?? 0
-  const frameRate = source?.frameRate && Number.isFinite(source.frameRate) && source.frameRate > 0 ? source.frameRate : null
-  const lastFrameIndex = frameRate ? Math.max(0, Math.min((source?.frameCount ?? Math.ceil(duration * frameRate)) - 1, Math.ceil(duration * frameRate - 0.0001) - 1)) : 0
-  const lastFrameTime = frameRate ? lastFrameIndex / frameRate : 0
+  const lastFrameTime = frameTimes?.at(-1) ?? 0
   const validCut = cutStart !== null && cutEnd !== null && cutEnd - cutStart >= 0.01 && duration - (cutEnd - cutStart) >= 0.2
 
   function seek(value: number) {
@@ -113,12 +123,10 @@ export default function Editor({ file, onExit, onSaved }: { file: EditorFile; on
 
   function stepFrame(direction: -1 | 1) {
     const video = videoRef.current
-    if (!video || !frameRate) return
+    if (!video || !frameTimes?.length) return
     video.pause()
-    const position = video.currentTime * frameRate
-    const index = direction < 0 ? Math.ceil(position - 0.0001) - 1 : Math.floor(position + 0.0001) + 1
-    if (direction > 0 && position >= lastFrameIndex - 0.0001) return
-    seek(Math.max(0, Math.min(index, lastFrameIndex)) / frameRate)
+    const next = adjacentFrameTime(frameTimes, playhead, direction)
+    if (next !== null) seek(next)
   }
 
   function applyCut() {
@@ -170,10 +178,10 @@ export default function Editor({ file, onExit, onSaved }: { file: EditorFile; on
       try {
         videoRef.current?.pause()
         flushSync(() => setVideoMounted(false))
-        const result = await invoke<EditResult>('export_edit', {
+        const result = await invoke<EditResult>('export_edit', { request: {
           path: file.path, destination, sourceSignature: source.sourceSignature,
           start: cutStart, end: cutEnd, replace,
-        })
+        } })
         if (replace) onExit(result, true)
         else {
           setVideoMounted(true)
@@ -206,11 +214,11 @@ export default function Editor({ file, onExit, onSaved }: { file: EditorFile; on
       <div className="editor-video-wrap">
         {source && videoMounted ? <video ref={videoRef} src={convertFileSrc(source.videoPath)} controls playsInline preload="metadata" onTimeUpdate={previewTime} onSeeked={previewTime} onPlay={() => { setPlaying(true); previewTime() }} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} aria-label={`Preview ${file.name}`} /> : <div className="editor-video-placeholder">{busy ? 'Rendering your edited video…' : source ? 'Preview paused' : error ? 'Editor unavailable for this video' : 'Opening video…'}</div>}
       </div>
-      {savedResult && <div className="editor-saved" role="status">Saved as {displayPath(savedResult.outputPath)}. Continue editing the original video here.</div>}
+      {savedResult && <div className="editor-saved" role="status">Saved as {displayPath(savedResult.outputPath)}. Continue editing the original video here.{savedResult.metadataWarnings.length > 0 && <> Track metadata changed: {savedResult.metadataWarnings.join('; ')}.</>}</div>}
       {error && <div className="editor-error" role="alert">{error}</div>}
       {busy && <div className="editor-progress" role="status"><span>Rendering MP4… {Math.round(progress)}%</span><progress max="100" value={progress} /></div>}
       {source && <section className="editor-controls" aria-label="Edit controls">
-        <div className="editor-time-line"><strong>{timecode(playhead)}</strong><span>of {timecode(duration)}</span>{frameRate && <span className="editor-frame-position">Frame {Math.min(lastFrameIndex, Math.round(playhead * frameRate)) + 1} of {lastFrameIndex + 1}</span>}</div>
+        <div className="editor-time-line"><strong>{timecode(playhead)}</strong><span>of {timecode(duration)}</span>{frameTimes?.length ? <span className="editor-frame-position">Frame {frameIndexAt(frameTimes, playhead) + 1} of {frameTimes.length}</span> : <span className="editor-frame-position">{frameError ? 'Frame navigation unavailable' : 'Reading frame times…'}</span>}</div>
         <div className="editor-track-wrap">
           {cutStart !== null && cutEnd !== null && cutEnd > cutStart && <div className={`editor-cut-overlay ${cutApplied ? 'applied' : ''}`} style={{ left: `${100 * cutStart / duration}%`, width: `${100 * (cutEnd - cutStart) / duration}%` }} />}
           <input type="range" min="0" max={duration} step="any" value={Math.min(playhead, duration)} onChange={event => seek(Number(event.target.value))} aria-label="Scrub through video" disabled={busy} />
@@ -218,8 +226,8 @@ export default function Editor({ file, onExit, onSaved }: { file: EditorFile; on
         <div className="editor-playback-controls" role="group" aria-label="Playback controls">
           <button type="button" onClick={playAgain} disabled={busy}>Play again</button>
           <button type="button" onClick={() => seek(0)} disabled={busy}>Move to start</button>
-          <button type="button" onClick={() => stepFrame(-1)} disabled={busy || !frameRate || playhead <= 0} title={frameRate ? undefined : 'Frame rate unavailable for this video'} aria-label="Back one frame">← 1 frame</button>
-          <button type="button" onClick={() => stepFrame(1)} disabled={busy || !frameRate || playhead >= lastFrameTime - 0.0001} title={frameRate ? undefined : 'Frame rate unavailable for this video'} aria-label="Forward one frame">1 frame →</button>
+          <button type="button" onClick={() => stepFrame(-1)} disabled={busy || !frameTimes?.length || playhead <= (frameTimes[0] ?? 0) + 0.0001} title={frameError ?? undefined} aria-label="Back one frame">← 1 frame</button>
+          <button type="button" onClick={() => stepFrame(1)} disabled={busy || !frameTimes?.length || playhead >= lastFrameTime - 0.0001} title={frameError ?? undefined} aria-label="Forward one frame">1 frame →</button>
           <button type="button" className="editor-play" onClick={togglePlayback} disabled={busy}>{playing ? 'Pause' : 'Play'}</button>
         </div>
         <div className="editor-range-actions">

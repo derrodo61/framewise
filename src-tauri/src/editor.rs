@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
@@ -11,15 +11,14 @@ use std::{
 use tauri::{Emitter, Manager};
 
 use crate::{AppState, run_ffprobe, video_file, within_root};
+mod frame_times;
+mod metadata;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct EditSource {
     video_path: String,
     duration: f64,
-    frame_rate: Option<f64>,
-    frame_count: Option<u64>,
-    has_audio: bool,
     source_signature: String,
 }
 
@@ -28,6 +27,18 @@ pub(crate) struct EditSource {
 pub(crate) struct EditResult {
     output_path: String,
     backup_path: Option<String>,
+    metadata_warnings: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ExportRequest {
+    path: String,
+    destination: String,
+    source_signature: String,
+    start: f64,
+    end: f64,
+    replace: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -39,20 +50,11 @@ struct EditProgress {
 
 struct MediaInfo {
     duration: f64,
-    frame_rate: Option<f64>,
-    frame_count: Option<u64>,
+    video_frames: Option<u64>,
     has_audio: bool,
     tags: BTreeMap<String, String>,
-}
-
-fn parse_frame_rate(rate: &str) -> Option<f64> {
-    let value = match rate.split_once('/') {
-        Some((numerator, denominator)) => {
-            numerator.parse::<f64>().ok()? / denominator.parse::<f64>().ok()?
-        }
-        None => rate.parse::<f64>().ok()?,
-    };
-    (value.is_finite() && value > 0.0 && value <= 1000.0).then_some(value)
+    video_tags: BTreeMap<String, String>,
+    audio_tags: BTreeMap<String, String>,
 }
 
 fn inspect(path: &Path) -> Result<MediaInfo, String> {
@@ -96,30 +98,22 @@ fn inspect(path: &Path) -> Result<MediaInfo, String> {
     if !duration.is_finite() || duration <= 0.2 {
         return Err("The video is too short to edit".into());
     }
-    let tags = value["format"]["tags"]
-        .as_object()
-        .map(|tags| {
-            tags.iter()
-                .filter_map(|(key, value)| {
-                    value.as_str().map(|value| (key.clone(), value.to_string()))
-                })
-                .collect()
-        })
+    let tags = metadata::tags(&value["format"]);
+    let video_tags = video_stream.map(metadata::tags).unwrap_or_default();
+    let audio_tags = streams
+        .iter()
+        .find(|stream| stream["codec_type"] == "audio")
+        .map(metadata::tags)
         .unwrap_or_default();
     Ok(MediaInfo {
         duration,
-        frame_rate: video_stream.and_then(|stream| {
-            stream["avg_frame_rate"]
-                .as_str()
-                .and_then(parse_frame_rate)
-                .or_else(|| stream["r_frame_rate"].as_str().and_then(parse_frame_rate))
-        }),
-        frame_count: video_stream
+        video_frames: video_stream
             .and_then(|stream| stream["nb_frames"].as_str())
-            .and_then(|count| count.parse::<u64>().ok())
-            .filter(|count| *count > 0),
+            .and_then(|count| count.parse::<u64>().ok()),
         has_audio: audio_count == 1,
         tags,
+        video_tags,
+        audio_tags,
     })
 }
 
@@ -150,11 +144,34 @@ pub(crate) fn prepare_edit(
     Ok(EditSource {
         video_path: source.to_string_lossy().into_owned(),
         duration: info.duration,
-        frame_rate: info.frame_rate,
-        frame_count: info.frame_count,
-        has_audio: info.has_audio,
         source_signature: signature(&source)?,
     })
+}
+
+#[tauri::command]
+pub(crate) async fn video_frame_times(
+    path: String,
+    source_signature: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<f64>, String> {
+    let source = within_root(&path, &state)?;
+    if !source.is_file() || !video_file(&source) {
+        return Err("Select a supported video file".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        if signature(&source)? != source_signature {
+            return Err(
+                "The source video changed. Reopen the editor to navigate its frames.".into(),
+            );
+        }
+        let times = frame_times::read(&source)?;
+        if signature(&source)? != source_signature {
+            return Err("The source video changed while reading its frames.".into());
+        }
+        Ok(times)
+    })
+    .await
+    .map_err(|error| format!("Frame timestamp task failed: {error}"))?
 }
 
 fn output_path(path: &str, source: &Path, replace: bool) -> Result<PathBuf, String> {
@@ -271,34 +288,6 @@ fn ffmpeg_candidates() -> Vec<PathBuf> {
     candidates
 }
 
-fn needs_metadata_keys(tags: &BTreeMap<String, String>) -> bool {
-    tags.keys().any(|key| {
-        ![
-            "major_brand",
-            "minor_version",
-            "compatible_brands",
-            "creation_time",
-            "title",
-            "comment",
-            "encoder",
-            "duration",
-            "bit_rate",
-            "number_of_frames",
-        ]
-        .iter()
-        .any(|standard| key.eq_ignore_ascii_case(standard))
-    })
-}
-
-fn preserved_tag(actual: Option<&String>, expected: &str, key: &str) -> bool {
-    actual.is_some_and(|value| {
-        value == expected
-            || (key.eq_ignore_ascii_case("creation_time")
-                && value.split(';').count() > 1
-                && value.split(';').all(|part| part == expected))
-    })
-}
-
 fn run_render(
     source: &Path,
     output: &Path,
@@ -350,7 +339,7 @@ fn run_render(
         if info.has_audio {
             command.args(["-c:a", "aac", "-b:a", "192k"]);
         }
-        let movflags = if needs_metadata_keys(&info.tags) {
+        let movflags = if metadata::needs_metadata_keys(&info.tags) {
             "+faststart+use_metadata_tags"
         } else {
             "+faststart"
@@ -431,7 +420,11 @@ fn run_render(
     ))
 }
 
-fn verify_output(path: &Path, expected: f64, source: &MediaInfo) -> Result<(), String> {
+fn duration_tolerance(expected: f64) -> f64 {
+    (expected * 0.05).clamp(0.05, 0.25)
+}
+
+fn verify_output(path: &Path, expected: f64, source: &MediaInfo) -> Result<Vec<String>, String> {
     if fs::metadata(path)
         .map_err(|error| format!("Cannot read rendered video: {error}"))?
         .len()
@@ -440,7 +433,10 @@ fn verify_output(path: &Path, expected: f64, source: &MediaInfo) -> Result<(), S
         return Err("FFmpeg created an empty video".into());
     }
     let result = inspect(path)?;
-    if (result.duration - expected).abs() > 1.0 {
+    if result.video_frames == Some(0) {
+        return Err("Rendered video contains no frames".into());
+    }
+    if (result.duration - expected).abs() > duration_tolerance(expected) {
         return Err(format!(
             "Rendered duration differs from the expected duration (expected {expected:.2}s, got {:.2}s)",
             result.duration
@@ -461,13 +457,25 @@ fn verify_output(path: &Path, expected: f64, source: &MediaInfo) -> Result<(), S
         {
             continue;
         }
-        if !preserved_tag(result.tags.get(key), value, key) {
+        if !metadata::preserved_tag(result.tags.get(key), value, key) {
             return Err(format!(
                 "The output could not preserve the metadata tag “{key}”. The original was not changed."
             ));
         }
     }
-    Ok(())
+    let mut warnings = Vec::new();
+    if let Some(warning) =
+        metadata::changed_stream_tags("Video", &source.video_tags, &result.video_tags)
+    {
+        warnings.push(warning);
+    }
+    if source.has_audio
+        && let Some(warning) =
+            metadata::changed_stream_tags("Audio", &source.audio_tags, &result.audio_tags)
+    {
+        warnings.push(warning);
+    }
+    Ok(warnings)
 }
 
 fn save_new_file(temp: &Path, destination: &Path) -> Result<(), String> {
@@ -553,7 +561,7 @@ fn export_impl(
     let temp = temporary_path(parent, "render");
     let result = (|| {
         run_render(&source, &temp, start, end, &info, &app)?;
-        verify_output(&temp, info.duration - (end - start), &info)?;
+        let metadata_warnings = verify_output(&temp, info.duration - (end - start), &info)?;
         if signature(&source)? != expected_signature {
             return Err("The source video changed while rendering. No file was replaced.".into());
         }
@@ -566,6 +574,7 @@ fn export_impl(
         Ok(EditResult {
             output_path: destination.to_string_lossy().into_owned(),
             backup_path,
+            metadata_warnings,
         })
     })();
     if result.is_err() {
@@ -576,28 +585,23 @@ fn export_impl(
 
 #[tauri::command]
 pub(crate) async fn export_edit(
-    path: String,
-    destination: String,
-    source_signature: String,
-    start: f64,
-    end: f64,
-    replace: bool,
+    request: ExportRequest,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<EditResult, String> {
-    let source = within_root(&path, &state)?;
+    let source = within_root(&request.path, &state)?;
     if !source.is_file() || !video_file(&source) {
         return Err("Select a supported video file".into());
     }
-    let destination = output_path(&destination, &source, replace)?;
+    let destination = output_path(&request.destination, &source, request.replace)?;
     tauri::async_runtime::spawn_blocking(move || {
         export_impl(
             source,
             destination,
-            source_signature,
-            start,
-            end,
-            replace,
+            request.source_signature,
+            request.start,
+            request.end,
+            request.replace,
             app,
         )
     })
@@ -607,16 +611,7 @@ pub(crate) async fn export_edit(
 
 #[cfg(test)]
 mod tests {
-    use super::{filter_graph, needs_metadata_keys, parse_frame_rate, preserved_tag, validate_cut};
-    use std::collections::BTreeMap;
-
-    #[test]
-    fn frame_rate_accepts_video_ratios_and_rejects_missing_rates() {
-        assert!((parse_frame_rate("30000/1001").unwrap() - 29.970_029_97).abs() < 0.000_01);
-        assert_eq!(parse_frame_rate("24/1"), Some(24.0));
-        assert_eq!(parse_frame_rate("0/0"), None);
-        assert_eq!(parse_frame_rate("N/A"), None);
-    }
+    use super::{duration_tolerance, filter_graph, validate_cut};
 
     #[test]
     fn cut_must_leave_playable_video() {
@@ -636,30 +631,9 @@ mod tests {
     }
 
     #[test]
-    fn standard_mp4_tags_do_not_need_generic_metadata_keys() {
-        let mut tags = BTreeMap::from([
-            ("creation_time".into(), "2026-10-04T18:55:09.000000Z".into()),
-            ("title".into(), "Recording".into()),
-            ("comment".into(), "Captured with Snagit".into()),
-        ]);
-        assert!(!needs_metadata_keys(&tags));
-        tags.insert("camera_model".into(), "Example".into());
-        assert!(needs_metadata_keys(&tags));
-    }
-
-    #[test]
-    fn duplicate_mp4_creation_time_values_still_preserve_the_date() {
-        let expected = "2026-10-04T18:55:09.000000Z";
-        assert!(preserved_tag(Some(&expected.to_string()), expected, "creation_time"));
-        assert!(preserved_tag(
-            Some(&format!("{expected};{expected}")),
-            expected,
-            "creation_time"
-        ));
-        assert!(!preserved_tag(
-            Some(&format!("{expected};2026-10-05T18:55:09.000000Z")),
-            expected,
-            "creation_time"
-        ));
+    fn duration_check_scales_with_short_and_long_exports() {
+        assert_eq!(duration_tolerance(0.2), 0.05);
+        assert_eq!(duration_tolerance(2.0), 0.1);
+        assert_eq!(duration_tolerance(20.0), 0.25);
     }
 }

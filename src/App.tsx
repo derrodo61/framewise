@@ -507,10 +507,13 @@ function App() {
     setEditingFile(null)
     if (!result || !listing || !file) return
     await browse(listing.path, { path: file.path })
+    const metadataNote = result.metadataWarnings.length > 0
+      ? ` Track metadata changed: ${result.metadataWarnings.join('; ')}.`
+      : ''
     setFileAction({
-      message: result.backupPath
+      message: (result.backupPath
         ? `Saved to ${displayPath(result.outputPath)}. The original backup remains at ${displayPath(result.backupPath)}.`
-        : replace ? `Saved “${file.name}”. The previous version is in Trash.` : `Saved edited video to ${displayPath(result.outputPath)}.`,
+        : replace ? `Saved “${file.name}”. The previous version is in Trash.` : `Saved edited video to ${displayPath(result.outputPath)}.`) + metadataNote,
       error: false,
     })
   }
@@ -519,7 +522,10 @@ function App() {
     const file = editingFile
     if (!listing || !file) return
     await browse(listing.path, { path: file.path })
-    setFileAction({ message: `Saved edited video to ${displayPath(result.outputPath)}.`, error: false })
+    const metadataNote = result.metadataWarnings.length > 0
+      ? ` Track metadata changed: ${result.metadataWarnings.join('; ')}.`
+      : ''
+    setFileAction({ message: `Saved edited video to ${displayPath(result.outputPath)}.${metadataNote}`, error: false })
   }
 
   const video = probe?.streams?.find(stream => stream.codec_type === 'video')

@@ -147,23 +147,28 @@ fn inspect_video(path: String, state: tauri::State<'_, AppState>) -> Result<serd
     })
 }
 
-fn execute_ffprobe(probe: &Path, video: &Path) -> io::Result<Output> {
+fn execute_ffprobe(probe: &Path, video: &Path, args: &[&str]) -> io::Result<Output> {
     Command::new(probe)
-        .args(["-v", "error", "-show_format", "-show_streams", "-show_chapters", "-of", "json"])
+        .args(["-v", "error"])
+        .args(args)
         .arg(video)
         .output()
 }
 
 fn run_ffprobe(video: &Path) -> io::Result<Output> {
+    run_ffprobe_with_args(video, &["-show_format", "-show_streams", "-show_chapters", "-of", "json"])
+}
+
+fn run_ffprobe_with_args(video: &Path, args: &[&str]) -> io::Result<Output> {
     if let Some(configured) = std::env::var_os("FFPROBE_PATH") {
-        return execute_ffprobe(Path::new(&configured), video);
+        return execute_ffprobe(Path::new(&configured), video, args);
     }
-    match execute_ffprobe(Path::new("ffprobe"), video) {
+    match execute_ffprobe(Path::new("ffprobe"), video, args) {
         #[cfg(windows)]
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             if let Some(probe) = winget_ffprobe() {
                 log::info!("Using ffprobe from Windows Package Manager: {}", probe.display());
-                execute_ffprobe(&probe, video)
+                execute_ffprobe(&probe, video, args)
             } else { Err(error) }
         }
         result => result,
@@ -273,10 +278,10 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
     #[cfg(desktop)]
     let builder = builder.on_window_event(|window, event| {
-        if let tauri::WindowEvent::CloseRequested { .. } = event {
-            if let Err(error) = window.app_handle().save_window_state(StateFlags::all()) {
-                log::error!("Could not save window state: {error}");
-            }
+        if let tauri::WindowEvent::CloseRequested { .. } = event
+            && let Err(error) = window.app_handle().save_window_state(StateFlags::all())
+        {
+            log::error!("Could not save window state: {error}");
         }
     });
     builder
@@ -285,7 +290,7 @@ pub fn run() {
             Ok(())
         })
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![select_root, list_directory, move_video_to_trash, duplicate::duplicate_video, inspect_video, prepare_preview, editor::prepare_edit, editor::export_edit])
+        .invoke_handler(tauri::generate_handler![select_root, list_directory, move_video_to_trash, duplicate::duplicate_video, inspect_video, prepare_preview, editor::prepare_edit, editor::video_frame_times, editor::export_edit])
         .run(tauri::generate_context!())
         .expect("error while building Tauri application");
 }
