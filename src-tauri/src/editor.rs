@@ -25,6 +25,15 @@ struct MediaInfo {
     audio_tags: BTreeMap<String, String>,
 }
 
+fn media_duration(value: &Value, streams: &[Value]) -> Option<f64> {
+    std::iter::once(&value["format"])
+        .chain(streams.iter())
+        .filter_map(|item| item["duration"].as_str())
+        .filter_map(|text| text.parse::<f64>().ok())
+        .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+        .max_by(f64::total_cmp)
+}
+
 fn inspect(path: &Path) -> Result<MediaInfo, String> {
     let output = run_ffprobe(path).map_err(|error| format!("Could not start ffprobe: {error}"))?;
     if !output.status.success() {
@@ -58,11 +67,7 @@ fn inspect(path: &Path) -> Result<MediaInfo, String> {
     {
         return Err("Editing videos with chapters is not supported yet.".into());
     }
-    let duration = value["format"]["duration"]
-        .as_str()
-        .or_else(|| video_stream.and_then(|stream| stream["duration"].as_str()))
-        .and_then(|text| text.parse::<f64>().ok())
-        .ok_or("The video duration is unavailable")?;
+    let duration = media_duration(&value, streams).ok_or("The video duration is unavailable")?;
     if !duration.is_finite() || duration <= 0.2 {
         return Err("The video is too short to edit".into());
     }
@@ -85,7 +90,25 @@ fn inspect(path: &Path) -> Result<MediaInfo, String> {
     })
 }
 
-fn signature(path: &Path) -> Result<String, String> {
+#[cfg(test)]
+mod duration_tests {
+    use super::media_duration;
+    use serde_json::json;
+
+    #[test]
+    fn uses_longest_reported_track_when_container_duration_is_shorter() {
+        let probe = json!({
+            "format": {"duration": "19.26"},
+            "streams": [
+                {"codec_type": "video", "duration": "30.00"},
+                {"codec_type": "audio", "duration": "29.98"}
+            ]
+        });
+        assert_eq!(media_duration(&probe, probe["streams"].as_array().unwrap()), Some(30.0));
+    }
+}
+
+pub(crate) fn signature(path: &Path) -> Result<String, String> {
     let metadata = fs::metadata(path).map_err(|error| format!("Cannot read video: {error}"))?;
     let modified = metadata
         .modified()

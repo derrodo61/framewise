@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { convertFileSrc, invoke, isTauri } from '@tauri-apps/api/core'
+import { invoke, isTauri } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { ask, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { error as logError } from '@tauri-apps/plugin-log'
 import { cutPreviewAction } from './cutPreview'
 import { adjacentFrameTime, frameIndexAt } from './frameNavigation'
-import { displayPath } from './paths'
+import { displayPath, versionedMediaSrc } from './paths'
 import './editor.css'
 
 type EditorFile = { name: string; path: string }
@@ -35,6 +35,7 @@ export default function Editor({ file, onExit, onSaved }: { file: EditorFile; on
   const [savedResult, setSavedResult] = useState<EditResult | null>(null)
   const [videoMounted, setVideoMounted] = useState(true)
   const [playhead, setPlayhead] = useState(0)
+  const [mediaDuration, setMediaDuration] = useState<number | null>(null)
   const [cutStart, setCutStart] = useState<number | null>(null)
   const [cutEnd, setCutEnd] = useState<number | null>(null)
   const [cutApplied, setCutApplied] = useState(false)
@@ -62,7 +63,7 @@ export default function Editor({ file, onExit, onSaved }: { file: EditorFile; on
     return () => { active = false }
   }, [file.path, source])
 
-  const duration = source?.duration ?? 0
+  const duration = mediaDuration ?? source?.duration ?? 0
   const lastFrameTime = frameTimes?.at(-1) ?? 0
   const validCut = cutStart !== null && cutEnd !== null && cutEnd - cutStart >= 0.01 && duration - (cutEnd - cutStart) >= 0.2
 
@@ -93,6 +94,11 @@ export default function Editor({ file, onExit, onSaved }: { file: EditorFile; on
     const video = videoRef.current
     cutSkipArmed.current = video !== null && cutEnd !== null && video.currentTime < cutEnd - 0.0001
     syncPreviewTime()
+  }
+
+  function syncMediaDuration() {
+    const value = videoRef.current?.duration
+    if (value !== undefined && Number.isFinite(value) && value > 0) setMediaDuration(value)
   }
 
   useEffect(() => {
@@ -240,7 +246,7 @@ export default function Editor({ file, onExit, onSaved }: { file: EditorFile; on
 
     <main className="editor-main">
       <div className="editor-video-wrap">
-        {source && videoMounted ? <video ref={videoRef} src={convertFileSrc(source.videoPath)} controls playsInline preload="metadata" onLoadedMetadata={() => { cutSkipArmed.current = cutApplied && cutEnd !== null && (videoRef.current?.currentTime ?? Infinity) < cutEnd }} onTimeUpdate={syncPreviewTime} onSeeked={previewSeeked} onPlay={() => { setPlaying(true); syncPreviewTime() }} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} aria-label={`Preview ${file.name}`} /> : <div className="editor-video-placeholder">{busy ? 'Rendering your edited video…' : source ? 'Preview paused' : error ? 'Editor unavailable for this video' : 'Opening video…'}</div>}
+        {source && videoMounted ? <video ref={videoRef} src={versionedMediaSrc(source.videoPath, source.sourceSignature)} controls playsInline preload="metadata" onLoadedMetadata={() => { syncMediaDuration(); cutSkipArmed.current = cutApplied && cutEnd !== null && (videoRef.current?.currentTime ?? Infinity) < cutEnd }} onDurationChange={syncMediaDuration} onTimeUpdate={syncPreviewTime} onSeeked={previewSeeked} onPlay={() => { setPlaying(true); syncPreviewTime() }} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} aria-label={`Preview ${file.name}`} /> : <div className="editor-video-placeholder">{busy ? 'Rendering your edited video…' : source ? 'Preview paused' : error ? 'Editor unavailable for this video' : 'Opening video…'}</div>}
       </div>
       {savedResult && <div className="editor-saved" role="status">Saved as {displayPath(savedResult.outputPath)}. Continue editing the original video here.{savedResult.metadataWarnings.length > 0 && <> Track metadata changed: {savedResult.metadataWarnings.join('; ')}.</>}</div>}
       {error && <div className="editor-error" role="alert">{error}</div>}

@@ -30,6 +30,7 @@ struct DirectoryListing {
 #[serde(rename_all = "camelCase")]
 struct Preview {
     video_path: String,
+    video_version: String,
     thumbnail_path: Option<String>,
 }
 
@@ -255,6 +256,7 @@ fn prepare_preview(path: String, state: tauri::State<'_, AppState>, app: tauri::
     if !video.is_file() || !video_file(&video) {
         return Err("Select a supported video file".into());
     }
+    let video_version = editor::signature(&video)?;
     app.asset_protocol_scope().allow_file(&video).map_err(|error| format!("Cannot open video preview: {error}"))?;
     let thumbnail_path = cached_thumbnail(&video, &app).and_then(|thumbnail| {
         if let Err(error) = app.asset_protocol_scope().allow_file(&thumbnail) {
@@ -262,7 +264,7 @@ fn prepare_preview(path: String, state: tauri::State<'_, AppState>, app: tauri::
             None
         } else { Some(thumbnail.to_string_lossy().into_owned()) }
     });
-    Ok(Preview { video_path: video.to_string_lossy().into_owned(), thumbnail_path })
+    Ok(Preview { video_path: video.to_string_lossy().into_owned(), video_version, thumbnail_path })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

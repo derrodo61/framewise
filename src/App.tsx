@@ -6,7 +6,7 @@ import { ask, open } from '@tauri-apps/plugin-dialog'
 import { error as logError } from '@tauri-apps/plugin-log'
 import Editor from './Editor'
 import type { EditResult } from './Editor'
-import { displayPath } from './paths'
+import { displayPath, versionedMediaSrc } from './paths'
 import './App.css'
 import './panels.css'
 import './settings.css'
@@ -30,7 +30,7 @@ type Probe = {
   streams?: ProbeStream[]
   chapters?: unknown[]
 }
-type Preview = { videoPath: string; thumbnailPath: string | null }
+type Preview = { videoPath: string; videoVersion: string; thumbnailPath: string | null }
 
 function Icon({ name, size = 20 }: { name: 'folder' | 'film' | 'chevron' | 'arrow' | 'info' | 'refresh' | 'copy' | 'check' | 'close' | 'settings' | 'sun' | 'moon' | 'play'; size?: number }) {
   const paths: Record<typeof name, React.ReactNode> = {
@@ -129,7 +129,7 @@ function VideoPreview({ file }: { file: FileEntry }) {
     return () => { video?.pause(); video?.removeAttribute('src') }
   }, [preview])
 
-  const videoUrl = preview ? convertFileSrc(preview.videoPath) : null
+  const videoUrl = preview ? versionedMediaSrc(preview.videoPath, preview.videoVersion) : null
   const thumbnailUrl = preview?.thumbnailPath ? convertFileSrc(preview.thumbnailPath) : null
 
   function startPlayback() {

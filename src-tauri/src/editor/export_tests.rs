@@ -218,10 +218,12 @@ fn save_replaces_original_and_disposes_its_backup() {
     let render = folder.0.join("render.mp4");
     fs::write(&source, b"original").unwrap();
     fs::write(&render, b"edited").unwrap();
+    let old_version = signature(&source).unwrap();
 
     let backup = replace_original_with(&render, &source, |path| fs::remove_file(path)).unwrap();
     assert!(backup.is_none());
     assert_eq!(fs::read(&source).unwrap(), b"edited");
+    assert_ne!(signature(&source).unwrap(), old_version);
     assert_eq!(fs::read_dir(&folder.0).unwrap().count(), 1);
 }
 
