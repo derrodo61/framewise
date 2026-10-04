@@ -91,6 +91,12 @@ export default function Editor({ file, onExit }: { file: EditorFile; onExit: (re
     if (video) void video.play().catch(() => {})
   }
 
+  function undoCut() {
+    setCutApplied(false)
+    setCutStart(null)
+    setCutEnd(null)
+  }
+
   async function leave() {
     if (busy) return
     if (cutStart !== null || cutEnd !== null) {
@@ -163,7 +169,7 @@ export default function Editor({ file, onExit }: { file: EditorFile; onExit: (re
         </div>
         <div className="editor-cut-actions">
           <button className="editor-remove" onClick={applyCut} disabled={!validCut || cutApplied || busy}>{cutApplied ? 'Removal ready' : 'Remove marked section'}</button>
-          <button className="editor-undo" onClick={() => setCutApplied(false)} disabled={!cutApplied || busy}>Undo removal</button>
+          <button className="editor-undo" onClick={undoCut} disabled={!cutApplied || busy}>Undo removal</button>
         </div>
         {cutApplied && cutStart !== null && cutEnd !== null
           ? <div className="editor-cut-ready" role="status"><strong>✓ Removal ready</strong><span>{timecode(cutEnd - cutStart)} is marked for removal. Playback skips it. Choose Save or Save As to create the edited video.</span></div>
