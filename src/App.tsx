@@ -84,6 +84,13 @@ function reportError(context: string, cause: unknown) {
   return message
 }
 function display(value: unknown) { return value === undefined || value === null || value === '' ? '—' : String(value) }
+function displayPath(path: string) {
+  const devicePrefix = '\\\\?\\'
+  const uncPrefix = `${devicePrefix}UNC\\`
+  if (path.slice(0, uncPrefix.length).toUpperCase() === uncPrefix.toUpperCase()) return '\\\\' + path.slice(uncPrefix.length)
+  if (path.startsWith(devicePrefix) && /^[A-Za-z]:\\/.test(path.slice(devicePrefix.length))) return path.slice(devicePrefix.length)
+  return path
+}
 function savedPanelState(key: string) { return window.localStorage.getItem(key) === 'true' }
 function savedPanelWidth(key: string, fallback: number) {
   const saved = window.localStorage.getItem(key)
@@ -414,9 +421,9 @@ function App() {
           ? <button className={`rail-icon media-rail ${view === 'media' ? 'active' : ''}`} onClick={() => setView('media')} title="Your media" aria-label="Your media"><Icon name="film" size={20} /></button>
           : <button className={`sidebar-media ${view === 'media' ? 'active' : ''}`} onClick={() => setView('media')}><Icon name="film" size={18} /> Your media</button>}
         {workspaceCollapsed ? root && <button className="rail-icon" onClick={() => browse(root, {})} title="Go to selected folder" aria-label="Go to selected folder"><Icon name="folder" size={20} /></button> : root ? <>
-          <button className="root-item" onClick={() => browse(root, {})} title={root}><Icon name="folder" size={19} /><span>{root.split(/[\\/]/).filter(Boolean).at(-1) || root}</span></button>
+          <button className="root-item" onClick={() => browse(root, {})} title={displayPath(root)}><Icon name="folder" size={19} /><span>{root.split(/[\\/]/).filter(Boolean).at(-1) || displayPath(root)}</span></button>
           <div className="sidebar-section-label">CURRENT FOLDER</div>
-          <div className="sidebar-current" title={listing?.path}>{listing?.path}</div>
+          <div className="sidebar-current" title={listing ? displayPath(listing.path) : undefined}>{listing && displayPath(listing.path)}</div>
         </> : <div className="sidebar-hint">Choose a folder to see your videos here.</div>}
         {workspaceCollapsed
           ? <button className={`rail-icon settings-rail ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')} title="Settings" aria-label="Settings"><Icon name="settings" size={20} /></button>
@@ -447,7 +454,7 @@ function App() {
           <section className="settings-card" aria-labelledby="startup-folder-heading">
             <div className="settings-card-heading"><div className="settings-card-icon"><Icon name="folder" size={22} /></div><div><h2 id="startup-folder-heading">Startup folder</h2><p>Open this folder automatically when Framewise starts.</p></div></div>
             <div className="setting-label">SELECTED FOLDER</div>
-            <div className={`setting-value ${defaultFolder ? '' : 'empty'}`} title={defaultFolder ?? undefined}>{defaultFolder ?? 'No startup folder selected'}</div>
+            <div className={`setting-value ${defaultFolder ? '' : 'empty'}`} title={defaultFolder ? displayPath(defaultFolder) : undefined}>{defaultFolder ? displayPath(defaultFolder) : 'No startup folder selected'}</div>
             {settingsError && <div className="settings-error" role="alert"><Icon name="info" size={18} /><span>{settingsError}</span></div>}
             {startupLoading && <div className="settings-loading">Opening startup folder…</div>}
             <div className="settings-actions">
