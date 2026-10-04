@@ -121,26 +121,39 @@ function VideoPreview({ file }: { file: FileEntry }) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const [preview, setPreview] = useState<Preview | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
+  const [thumbnailPending, setThumbnailPending] = useState(false)
   const [playing, setPlaying] = useState(false)
   const [playbackError, setPlaybackError] = useState(false)
 
   useEffect(() => {
     let active = true
-    const timer = window.setTimeout(() => {
-      invoke<Preview>('prepare_preview', { path: file.path })
-        .then(result => { if (active) setPreview(result) })
-        .catch(cause => { if (active) setPreviewError(reportError('Preparing video preview', cause)) })
-    }, 120)
+    let timer: number | undefined
+    invoke<Preview>('prepare_preview', { path: file.path })
+      .then(result => {
+        if (!active) return
+        setPreview(result)
+        if (result.thumbnailPath) return
+        setThumbnailPending(true)
+        timer = window.setTimeout(() => {
+          invoke<string | null>('generate_preview_thumbnail', { path: file.path })
+            .then(thumbnailPath => {
+              if (active && thumbnailPath) setPreview(current => current ? { ...current, thumbnailPath } : current)
+            })
+            .catch(cause => { if (active) setPreviewError(reportError('Preparing video thumbnail', cause)) })
+            .finally(() => { if (active) setThumbnailPending(false) })
+        }, 120)
+      })
+      .catch(cause => { if (active) setPreviewError(reportError('Preparing video preview', cause)) })
     return () => { active = false; window.clearTimeout(timer) }
   }, [file.path])
+
+  const videoUrl = preview ? versionedMediaSrc(preview.videoPath, preview.videoVersion) : null
+  const thumbnailUrl = preview?.thumbnailPath ? convertFileSrc(preview.thumbnailPath) : null
 
   useEffect(() => {
     const video = videoRef.current
     return () => { video?.pause(); video?.removeAttribute('src') }
-  }, [preview])
-
-  const videoUrl = preview ? versionedMediaSrc(preview.videoPath, preview.videoVersion) : null
-  const thumbnailUrl = preview?.thumbnailPath ? convertFileSrc(preview.thumbnailPath) : null
+  }, [videoUrl])
 
   function startPlayback() {
     if (!videoRef.current) return
@@ -155,7 +168,7 @@ function VideoPreview({ file }: { file: FileEntry }) {
       {videoUrl && <video ref={videoRef} src={videoUrl} poster={thumbnailUrl ?? undefined} preload="none" controls={playing} playsInline onError={() => { setPlaying(false); setPlaybackError(true) }} aria-label={`Playing ${file.name}`} />}
       {!playing && (thumbnailUrl ? <img src={thumbnailUrl} alt={`Preview frame from ${file.name}`} /> : <div className="preview-placeholder"><Icon name="film" size={36} /></div>)}
       {preview && !playing && <button className="preview-play" onClick={startPlayback} aria-label={`Play ${file.name}`}><Icon name="play" size={24} /></button>}
-      {!preview && !previewError && <span className="preview-loading">Preparing preview…</span>}
+      {(!preview || (thumbnailPending && !playing)) && !previewError && <span className="preview-loading">Preparing preview…</span>}
     </div>
     {previewError && <p className="preview-message" role="alert">Preview unavailable: {previewError}</p>}
     {playbackError && <p className="preview-message" role="alert">This video format may not play in the system WebView. The metadata remains available below.</p>}
@@ -187,6 +200,8 @@ function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
   const [defaultFolder, setDefaultFolder] = useState<string | null>(() => getPreference('framewise.defaultFolder'))
   const [settingsError, setSettingsError] = useState<string | null>(null)
+  const [previewCacheDirectory, setPreviewCacheDirectory] = useState<string | null>(null)
+  const [previewCacheError, setPreviewCacheError] = useState<string | null>(null)
   const [startupLoading, setStartupLoading] = useState(() => Boolean(getPreference('framewise.defaultFolder')))
   const [workspaceCollapsed, setWorkspaceCollapsed] = useState(() => savedPanelState('framewise.workspaceCollapsed'))
   const [inspectorCollapsed, setInspectorCollapsed] = useState(() => savedPanelState('framewise.inspectorCollapsed'))
@@ -214,6 +229,15 @@ function App() {
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [])
+
+  useEffect(() => {
+    if (view !== 'settings' || !isTauri()) return
+    let active = true
+    invoke<string>('preview_cache_directory')
+      .then(path => { if (active) { setPreviewCacheDirectory(path); setPreviewCacheError(null) } })
+      .catch(cause => { if (active) setPreviewCacheError(reportError('Locating preview cache', cause)) })
+    return () => { active = false }
+  }, [view])
 
   useEffect(() => {
     const saved = getPreference('framewise.defaultFolder')
@@ -753,6 +777,13 @@ function App() {
               {defaultFolder && <button className="settings-clear" onClick={clearDefaultFolder}>Clear</button>}
             </div>
             <p className="settings-footnote">The folder path is saved locally. You can still browse other folders at any time.</p>
+          </section>
+          <section className="settings-card" aria-labelledby="preview-cache-heading">
+            <div className="settings-card-heading"><div className="settings-card-icon"><Icon name="film" size={22} /></div><div><h2 id="preview-cache-heading">Preview images</h2><p>Framewise creates a preview image when you select a video for the first time, then reuses it on later selections. If the video changes, a new image is created.</p></div></div>
+            <div className="setting-label">CACHE FOLDER · READ ONLY</div>
+            <div className={`setting-value ${previewCacheDirectory ? '' : 'empty'}`} title={previewCacheDirectory ? displayPath(previewCacheDirectory) : undefined}>{previewCacheDirectory ? displayPath(previewCacheDirectory) : previewCacheError ? 'Cache folder unavailable' : isTauri() ? 'Locating cache folder…' : 'Available in the desktop app'}</div>
+            {previewCacheError && <div className="settings-error" role="alert"><Icon name="info" size={18} /><span>{previewCacheError}</span></div>}
+            <p className="settings-footnote">Preview images are stored in <code>.framewise/previews</code> alongside your preferences and window settings. They can be regenerated if deleted.</p>
           </section>
         </> : <>
         <div className="content-heading">

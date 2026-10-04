@@ -253,7 +253,7 @@ fn execute_ffmpeg(program: &Path, video: &Path, thumbnail: &Path, seek: &str) ->
     Command::new(program)
         .args(["-hide_banner", "-loglevel", "error", "-ss", seek, "-i"])
         .arg(video)
-        .args(["-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "3", "-y"])
+        .args(["-frames:v", "1", "-vf", "scale=480:-2", "-y"])
         .arg(thumbnail)
         .output()
 }
@@ -279,20 +279,126 @@ fn run_ffmpeg(video: &Path, thumbnail: &Path, seek: &str) -> io::Result<Output> 
     }
 }
 
-fn cached_thumbnail(video: &Path, app: &tauri::AppHandle) -> Option<PathBuf> {
+fn thumbnail_name(video: &Path) -> Option<String> {
     let metadata = fs::metadata(video).ok()?;
     let mut hash = DefaultHasher::new();
     video.hash(&mut hash);
     metadata.len().hash(&mut hash);
     metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_nanos().hash(&mut hash);
-    let directory = app.path().app_cache_dir().ok()?.join("previews");
-    if let Err(error) = fs::create_dir_all(&directory) {
+    Some(format!("{:016x}", hash.finish()))
+}
+
+fn preview_cache_dir() -> Result<PathBuf, String> {
+    Ok(preferences::settings_dir()?.join("previews"))
+}
+
+fn ensure_preview_cache_dir() -> Result<PathBuf, String> {
+    let directory = preview_cache_dir()?;
+    fs::create_dir_all(&directory).map_err(|error| format!("Cannot create preview cache: {error}"))?;
+    Ok(directory)
+}
+
+fn valid_thumbnail(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|file| file.file_type().is_file() && file.len() > 0)
+}
+
+fn preview_filename(path: &Path) -> bool {
+    matches!(path.extension().and_then(|extension| extension.to_str()), Some("png" | "jpg"))
+        && path.file_stem().and_then(|stem| stem.to_str())
+            .is_some_and(|stem| stem.len() == 16 && stem.bytes().all(|byte| byte.is_ascii_hexdigit()))
+}
+
+fn move_cached_thumbnail(old: &Path, target: &Path) -> io::Result<()> {
+    if fs::rename(old, target).is_ok() {
+        return Ok(());
+    }
+    let expected_size = fs::metadata(old)?.len();
+    match fs::copy(old, target) {
+        Ok(copied_size) if copied_size == expected_size => fs::remove_file(old),
+        result => {
+            let _ = fs::remove_file(target);
+            match result {
+                Ok(_) => Err(io::Error::other("Preview copy was incomplete")),
+                Err(error) => Err(error),
+            }
+        }
+    }
+}
+
+fn migrate_preview_cache(app: &tauri::AppHandle) -> Result<(), String> {
+    let old_directory = app.path().app_cache_dir()
+        .map_err(|error| format!("Cannot locate previous preview cache: {error}"))?.join("previews");
+    if !old_directory.is_dir() {
+        return Ok(());
+    }
+    let directory = ensure_preview_cache_dir()?;
+    let entries = fs::read_dir(&old_directory)
+        .map_err(|error| format!("Cannot read previous preview cache: {error}"))?;
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => { log::warn!("Could not read a previous preview: {error}"); continue; }
+        };
+        let old = entry.path();
+        if !preview_filename(&old) || !valid_thumbnail(&old) {
+            continue;
+        }
+        let target = directory.join(entry.file_name());
+        if valid_thumbnail(&target) {
+            if let Err(error) = fs::remove_file(&old) {
+                log::warn!("Could not remove duplicate preview: {error}");
+            }
+            continue;
+        }
+        if target.exists() && fs::remove_file(&target).is_err() {
+            log::warn!("Could not replace an incomplete preview: {}", target.display());
+            continue;
+        }
+        if let Err(error) = move_cached_thumbnail(&old, &target) {
+            log::warn!("Could not move previous preview: {error}");
+        }
+    }
+    Ok(())
+}
+
+fn existing_thumbnail(video: &Path, app: &tauri::AppHandle) -> Option<PathBuf> {
+    let name = thumbnail_name(video)?;
+    let directory = preview_cache_dir().ok()?;
+    for extension in ["png", "jpg"] {
+        let target = directory.join(format!("{name}.{extension}"));
+        if valid_thumbnail(&target) {
+            return Some(target);
+        }
+    }
+    let old_directory = app.path().app_cache_dir().ok()?.join("previews");
+    for extension in ["png", "jpg"] {
+        let old = old_directory.join(format!("{name}.{extension}"));
+        if !valid_thumbnail(&old) {
+            continue;
+        }
+        let target = directory.join(format!("{name}.{extension}"));
+        if let Err(error) = fs::create_dir_all(&directory).and_then(|_| move_cached_thumbnail(&old, &target)) {
+            log::warn!("Could not move cached preview into .framewise: {error}");
+            return Some(old);
+        }
+        return Some(target);
+    }
+    None
+}
+
+#[tauri::command]
+fn preview_cache_directory() -> Result<String, String> {
+    Ok(ensure_preview_cache_dir()?.to_string_lossy().into_owned())
+}
+
+fn create_thumbnail(video: &Path, app: &tauri::AppHandle) -> Option<PathBuf> {
+    if let Some(thumbnail) = existing_thumbnail(video, app) {
+        return Some(thumbnail);
+    }
+    let thumbnail = preview_cache_dir().ok()?.join(format!("{}.png", thumbnail_name(video)?));
+    if let Err(error) = fs::create_dir_all(thumbnail.parent()?) {
         log::warn!("Could not create preview cache: {error}");
         return None;
-    }
-    let thumbnail = directory.join(format!("{:016x}.jpg", hash.finish()));
-    if thumbnail.metadata().is_ok_and(|file| file.len() > 0) {
-        return Some(thumbnail);
     }
     for seek in ["1", "0"] {
         match run_ffmpeg(video, &thumbnail, seek) {
@@ -300,6 +406,7 @@ fn cached_thumbnail(video: &Path, app: &tauri::AppHandle) -> Option<PathBuf> {
             Ok(output) => log::warn!("Could not create video thumbnail: {}", String::from_utf8_lossy(&output.stderr).trim()),
             Err(error) => { log::warn!("Could not start ffmpeg for thumbnail: {error}"); break; }
         }
+        let _ = fs::remove_file(&thumbnail);
     }
     None
 }
@@ -312,13 +419,30 @@ fn prepare_preview(path: String, state: tauri::State<'_, AppState>, app: tauri::
     }
     let video_version = editor::signature(&video)?;
     app.asset_protocol_scope().allow_file(&video).map_err(|error| format!("Cannot open video preview: {error}"))?;
-    let thumbnail_path = cached_thumbnail(&video, &app).and_then(|thumbnail| {
+    let thumbnail_path = existing_thumbnail(&video, &app).and_then(|thumbnail| {
         if let Err(error) = app.asset_protocol_scope().allow_file(&thumbnail) {
             log::warn!("Could not expose video thumbnail: {error}");
             None
         } else { Some(thumbnail.to_string_lossy().into_owned()) }
     });
     Ok(Preview { video_path: video.to_string_lossy().into_owned(), video_version, thumbnail_path })
+}
+
+#[tauri::command]
+async fn generate_preview_thumbnail(path: String, state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let video = within_root(&path, &state)?;
+    if !video.is_file() || !video_file(&video) {
+        return Err("Select a supported video file".into());
+    }
+    let worker_app = app.clone();
+    let thumbnail = tauri::async_runtime::spawn_blocking(move || create_thumbnail(&video, &worker_app))
+        .await.map_err(|error| format!("Could not prepare video thumbnail: {error}"))?;
+    Ok(thumbnail.and_then(|thumbnail| {
+        if let Err(error) = app.asset_protocol_scope().allow_file(&thumbnail) {
+            log::warn!("Could not expose video thumbnail: {error}");
+            None
+        } else { Some(thumbnail.to_string_lossy().into_owned()) }
+    }))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -349,13 +473,18 @@ pub fn run() {
         }
     });
     builder
-        .setup(|_| {
+        .setup(|app| {
             log::info!("Framewise started");
+            if let Err(error) = ensure_preview_cache_dir() {
+                log::error!("Could not prepare preview cache: {error}");
+            } else if let Err(error) = migrate_preview_cache(app.handle()) {
+                log::warn!("Could not migrate previous preview cache: {error}");
+            }
             Ok(())
         })
         .manage(AppState::default())
         .manage(move_files::MoveState::default())
-        .invoke_handler(tauri::generate_handler![select_root, list_directory, move_videos_to_trash, move_folder_to_trash, duplicate::duplicate_video, rename::rename_video, rename::rename_folder, move_files::begin_move, move_files::move_session, move_files::list_move_directory, move_files::create_move_folder, move_files::create_media_folder, move_files::move_selected, preferences::load_preferences, preferences::save_preferences, inspect_video, prepare_preview, editor::prepare_edit, editor::video_frame_times, editor::export::export_edit])
+        .invoke_handler(tauri::generate_handler![select_root, list_directory, move_videos_to_trash, move_folder_to_trash, duplicate::duplicate_video, rename::rename_video, rename::rename_folder, move_files::begin_move, move_files::move_session, move_files::list_move_directory, move_files::create_move_folder, move_files::create_media_folder, move_files::move_selected, preferences::load_preferences, preferences::save_preferences, inspect_video, prepare_preview, generate_preview_thumbnail, preview_cache_directory, editor::prepare_edit, editor::video_frame_times, editor::export::export_edit])
         .run(tauri::generate_context!())
         .expect("error while building Tauri application");
 }

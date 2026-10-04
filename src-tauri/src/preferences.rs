@@ -21,7 +21,7 @@ struct SettingsFile {
     values: BTreeMap<String, String>,
 }
 
-fn settings_dir() -> Result<PathBuf, String> {
+pub(super) fn settings_dir() -> Result<PathBuf, String> {
     dirs::home_dir()
         .map(|home| home.join(".framewise"))
         .ok_or_else(|| "Cannot find your home folder for Framewise settings".into())
