@@ -84,9 +84,11 @@ export default function Editor({ file, onExit }: { file: EditorFile; onExit: (re
 
   function applyCut() {
     if (!validCut) return
-    videoRef.current?.pause()
+    const video = videoRef.current
+    video?.pause()
     setCutApplied(true)
     seek(Math.max(0, (cutStart ?? 0) - 1))
+    if (video) void video.play().catch(() => {})
   }
 
   async function leave() {
@@ -160,10 +162,12 @@ export default function Editor({ file, onExit }: { file: EditorFile; onExit: (re
           <div className="editor-marker"><button onClick={() => updateEnd(playhead)} disabled={busy}>Mark end</button><label>End (seconds)<input type="number" min="0" max={duration} step="0.01" value={cutEnd ?? ''} placeholder="—" onChange={event => updateEnd(event.target.value === '' ? null : Number(event.target.value))} disabled={busy} /></label>{cutEnd !== null && <span>{timecode(cutEnd)}</span>}</div>
         </div>
         <div className="editor-cut-actions">
-          <button className="editor-remove" onClick={applyCut} disabled={!validCut || cutApplied || busy}>Remove marked section</button>
+          <button className="editor-remove" onClick={applyCut} disabled={!validCut || cutApplied || busy}>{cutApplied ? 'Removal ready' : 'Remove marked section'}</button>
           <button className="editor-undo" onClick={() => setCutApplied(false)} disabled={!cutApplied || busy}>Undo removal</button>
-          <span>{cutApplied && cutStart !== null && cutEnd !== null ? `${timecode(cutEnd - cutStart)} will be removed. Playback skips this section.` : 'Mark a start and end, then remove that section.'}</span>
         </div>
+        {cutApplied && cutStart !== null && cutEnd !== null
+          ? <div className="editor-cut-ready" role="status"><strong>✓ Removal ready</strong><span>{timecode(cutEnd - cutStart)} is marked for removal. Playback skips it. Choose Save or Save As to create the edited video.</span></div>
+          : <p className="editor-cut-hint">Mark a start and end, then remove that section.</p>}
         <p className="editor-note">The original stays unchanged until Save. Output is 8-bit H.264/AAC MP4 with one video track and up to one audio track. Descriptive tags are copied where supported; duration and frame counts are recalculated.</p>
       </section>}
     </main>
