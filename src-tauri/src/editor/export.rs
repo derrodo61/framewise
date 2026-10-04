@@ -361,6 +361,14 @@ fn save_new_file(temp: &Path, destination: &Path) -> Result<(), String> {
 }
 
 fn replace_original(temp: &Path, source: &Path) -> Result<Option<String>, String> {
+    replace_original_with(temp, source, |backup| trash::delete(backup))
+}
+
+fn replace_original_with<E: std::fmt::Display>(
+    temp: &Path,
+    source: &Path,
+    dispose_backup: impl FnOnce(&Path) -> Result<(), E>,
+) -> Result<Option<String>, String> {
     let parent = source.parent().ok_or("Cannot find the source folder")?;
     let name = source
         .file_stem()
@@ -379,7 +387,7 @@ fn replace_original(temp: &Path, source: &Path) -> Result<Option<String>, String
             ),
         });
     }
-    if let Err(error) = trash::delete(&backup) {
+    if let Err(error) = dispose_backup(&backup) {
         log::warn!("Original backup could not be moved to Trash: {error}");
         return Ok(Some(backup.to_string_lossy().into_owned()));
     }

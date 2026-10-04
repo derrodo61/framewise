@@ -1,9 +1,10 @@
 use super::{
-    duration_tolerance, ffmpeg_candidates, filter_graph, run_render, validate_cut, verify_output,
+    duration_tolerance, ffmpeg_candidates, filter_graph, output_path, replace_original_with,
+    run_render, save_new_file, validate_cut, verify_output,
 };
 use crate::editor::{frame_times, inspect, signature};
 use std::{
-    fs,
+    fs, io,
     path::{Path, PathBuf},
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
@@ -169,4 +170,71 @@ fn exports_variable_frame_rate_video_with_audio() {
     run_render(&source, &output, 1.0, 1.6, &info, |_| {}).unwrap();
     verify_output(&output, info.duration - 0.6, &info).unwrap();
     assert!(inspect(&output).unwrap().has_audio);
+}
+
+#[test]
+fn save_as_creates_a_new_file_without_overwriting_an_existing_one() {
+    let folder = TestFolder::new();
+    let source = folder.0.join("source.mp4");
+    let destination = folder.0.join("edited.mp4");
+    let render = folder.0.join("render.mp4");
+    fs::write(&source, b"original").unwrap();
+    fs::write(&render, b"edited").unwrap();
+
+    let selected = output_path(destination.to_str().unwrap(), &source, false).unwrap();
+    save_new_file(&render, &selected).unwrap();
+    assert_eq!(fs::read(&source).unwrap(), b"original");
+    assert_eq!(fs::read(&destination).unwrap(), b"edited");
+    assert!(!render.exists());
+
+    fs::write(&render, b"another edit").unwrap();
+    assert!(output_path(destination.to_str().unwrap(), &source, false).is_err());
+    assert!(save_new_file(&render, &destination).is_err());
+    assert_eq!(fs::read(&destination).unwrap(), b"edited");
+}
+
+#[test]
+fn save_replaces_verified_output_and_retains_backup_when_trash_fails() {
+    let folder = TestFolder::new();
+    let source = folder.0.join("source.mp4");
+    let render = folder.0.join("render.mp4");
+    fs::write(&source, b"original").unwrap();
+    fs::write(&render, b"edited").unwrap();
+
+    let backup = replace_original_with(&render, &source, |_path| {
+        Err::<(), _>(io::Error::other("Trash unavailable"))
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(fs::read(&source).unwrap(), b"edited");
+    assert_eq!(fs::read(&backup).unwrap(), b"original");
+    assert!(!render.exists());
+}
+
+#[test]
+fn save_replaces_original_and_disposes_its_backup() {
+    let folder = TestFolder::new();
+    let source = folder.0.join("source.mp4");
+    let render = folder.0.join("render.mp4");
+    fs::write(&source, b"original").unwrap();
+    fs::write(&render, b"edited").unwrap();
+
+    let backup = replace_original_with(&render, &source, |path| fs::remove_file(path)).unwrap();
+    assert!(backup.is_none());
+    assert_eq!(fs::read(&source).unwrap(), b"edited");
+    assert_eq!(fs::read_dir(&folder.0).unwrap().count(), 1);
+}
+
+#[test]
+fn save_restores_original_if_replacement_fails() {
+    let folder = TestFolder::new();
+    let source = folder.0.join("source.mp4");
+    let missing_render = folder.0.join("missing-render.mp4");
+    fs::write(&source, b"original").unwrap();
+
+    assert!(
+        replace_original_with(&missing_render, &source, |_path| Ok::<(), io::Error>(())).is_err()
+    );
+    assert_eq!(fs::read(&source).unwrap(), b"original");
+    assert_eq!(fs::read_dir(&folder.0).unwrap().count(), 1);
 }

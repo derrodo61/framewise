@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { convertFileSrc, invoke, isTauri } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { ask, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { error as logError } from '@tauri-apps/plugin-log'
+import { cutPreviewAction } from './cutPreview'
 import { adjacentFrameTime, frameIndexAt } from './frameNavigation'
 import { displayPath } from './paths'
 import './editor.css'
@@ -42,6 +43,7 @@ export default function Editor({ file, onExit, onSaved }: { file: EditorFile; on
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState(0)
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const cutSkipArmed = useRef(false)
 
   useEffect(() => {
     let active = true
@@ -64,8 +66,49 @@ export default function Editor({ file, onExit, onSaved }: { file: EditorFile; on
   const lastFrameTime = frameTimes?.at(-1) ?? 0
   const validCut = cutStart !== null && cutEnd !== null && cutEnd - cutStart >= 0.01 && duration - (cutEnd - cutStart) >= 0.2
 
+  const syncPreviewTime = useCallback(() => {
+    const video = videoRef.current
+    if (!video || video.seeking) return
+    const time = video.currentTime
+    if (cutApplied && cutStart !== null && cutEnd !== null && !video.paused) {
+      const action = cutPreviewAction(time, cutStart, cutEnd, duration, cutSkipArmed.current)
+      if (action === 'stop') {
+        cutSkipArmed.current = false
+        video.pause()
+        video.currentTime = 0
+        setPlayhead(0)
+        return
+      }
+      if (action === 'skip') {
+        cutSkipArmed.current = false
+        video.currentTime = cutEnd
+        setPlayhead(cutEnd)
+        return
+      }
+    }
+    setPlayhead(time)
+  }, [cutApplied, cutStart, cutEnd, duration])
+
+  function previewSeeked() {
+    const video = videoRef.current
+    cutSkipArmed.current = video !== null && cutEnd !== null && video.currentTime < cutEnd - 0.0001
+    syncPreviewTime()
+  }
+
+  useEffect(() => {
+    if (!playing || !cutApplied) return
+    let frame = 0
+    const check = () => {
+      syncPreviewTime()
+      frame = window.requestAnimationFrame(check)
+    }
+    frame = window.requestAnimationFrame(check)
+    return () => window.cancelAnimationFrame(frame)
+  }, [playing, cutApplied, syncPreviewTime])
+
   function seek(value: number) {
     const next = Math.min(Math.max(value, 0), duration)
+    cutSkipArmed.current = cutEnd !== null && next < cutEnd - 0.0001
     if (videoRef.current) videoRef.current.currentTime = next
     setPlayhead(next)
   }
@@ -84,24 +127,6 @@ export default function Editor({ file, onExit, onSaved }: { file: EditorFile; on
     setCutApplied(false)
     setHasUnsavedChanges(cutStart !== null || next !== null)
     setSavedResult(null)
-  }
-
-  function previewTime() {
-    const video = videoRef.current
-    if (!video) return
-    const time = video.currentTime
-    if (cutApplied && cutStart !== null && cutEnd !== null && !video.paused) {
-      if (cutEnd >= duration - 0.01 && time >= cutStart) {
-        video.pause()
-        seek(0)
-        return
-      }
-      if (time >= cutStart && time < cutEnd) {
-        seek(cutEnd)
-        return
-      }
-    }
-    setPlayhead(time)
   }
 
   function startPlayback() {
@@ -135,10 +160,11 @@ export default function Editor({ file, onExit, onSaved }: { file: EditorFile; on
     video?.pause()
     setCutApplied(true)
     seek(Math.max(0, (cutStart ?? 0) - 1))
-    if (video) void video.play().catch(() => {})
+    if (video) startPlayback()
   }
 
   function undoCut() {
+    cutSkipArmed.current = false
     setCutApplied(false)
     setCutStart(null)
     setCutEnd(null)
@@ -184,6 +210,7 @@ export default function Editor({ file, onExit, onSaved }: { file: EditorFile; on
         } })
         if (replace) onExit(result, true)
         else {
+          cutSkipArmed.current = cutApplied && cutEnd !== null
           setVideoMounted(true)
           setPlayhead(0)
           setPlaying(false)
@@ -195,6 +222,7 @@ export default function Editor({ file, onExit, onSaved }: { file: EditorFile; on
       } finally { unlisten() }
     } catch (cause) {
       setError(reportError('Saving edited video', cause))
+      cutSkipArmed.current = cutApplied && cutEnd !== null
       setVideoMounted(true)
       setBusy(false)
     }
@@ -212,7 +240,7 @@ export default function Editor({ file, onExit, onSaved }: { file: EditorFile; on
 
     <main className="editor-main">
       <div className="editor-video-wrap">
-        {source && videoMounted ? <video ref={videoRef} src={convertFileSrc(source.videoPath)} controls playsInline preload="metadata" onTimeUpdate={previewTime} onSeeked={previewTime} onPlay={() => { setPlaying(true); previewTime() }} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} aria-label={`Preview ${file.name}`} /> : <div className="editor-video-placeholder">{busy ? 'Rendering your edited video…' : source ? 'Preview paused' : error ? 'Editor unavailable for this video' : 'Opening video…'}</div>}
+        {source && videoMounted ? <video ref={videoRef} src={convertFileSrc(source.videoPath)} controls playsInline preload="metadata" onLoadedMetadata={() => { cutSkipArmed.current = cutApplied && cutEnd !== null && (videoRef.current?.currentTime ?? Infinity) < cutEnd }} onTimeUpdate={syncPreviewTime} onSeeked={previewSeeked} onPlay={() => { setPlaying(true); syncPreviewTime() }} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} aria-label={`Preview ${file.name}`} /> : <div className="editor-video-placeholder">{busy ? 'Rendering your edited video…' : source ? 'Preview paused' : error ? 'Editor unavailable for this video' : 'Opening video…'}</div>}
       </div>
       {savedResult && <div className="editor-saved" role="status">Saved as {displayPath(savedResult.outputPath)}. Continue editing the original video here.{savedResult.metadataWarnings.length > 0 && <> Track metadata changed: {savedResult.metadataWarnings.join('; ')}.</>}</div>}
       {error && <div className="editor-error" role="alert">{error}</div>}
