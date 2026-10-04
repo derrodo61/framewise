@@ -4,6 +4,9 @@ import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent } from 'rea
 import { convertFileSrc, invoke, isTauri } from '@tauri-apps/api/core'
 import { ask, open } from '@tauri-apps/plugin-dialog'
 import { error as logError } from '@tauri-apps/plugin-log'
+import Editor from './Editor'
+import type { EditResult } from './Editor'
+import { displayPath } from './paths'
 import './App.css'
 import './panels.css'
 import './settings.css'
@@ -86,13 +89,6 @@ function reportError(context: string, cause: unknown) {
   return message
 }
 function display(value: unknown) { return value === undefined || value === null || value === '' ? '—' : String(value) }
-function displayPath(path: string) {
-  const devicePrefix = '\\\\?\\'
-  const uncPrefix = `${devicePrefix}UNC\\`
-  if (path.slice(0, uncPrefix.length).toUpperCase() === uncPrefix.toUpperCase()) return '\\\\' + path.slice(uncPrefix.length)
-  if (path.startsWith(devicePrefix) && /^[A-Za-z]:\\/.test(path.slice(devicePrefix.length))) return path.slice(devicePrefix.length)
-  return path
-}
 function savedPanelState(key: string) { return window.localStorage.getItem(key) === 'true' }
 function savedPanelWidth(key: string, fallback: number) {
   const saved = window.localStorage.getItem(key)
@@ -163,6 +159,7 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [copyDone, setCopyDone] = useState(false)
+  const [editingFile, setEditingFile] = useState<FileEntry | null>(null)
   const [contextMenu, setContextMenu] = useState<{ file: FileEntry; x: number; y: number } | null>(null)
   const [fileAction, setFileAction] = useState<{ message: string; error: boolean } | null>(null)
   const [deleting, setDeleting] = useState(false)
@@ -479,11 +476,26 @@ function App() {
     } catch (cause) { setError(`Could not copy metadata: ${reportError('Copying metadata', cause)}`) }
   }
 
+  async function finishEditing(result: EditResult | null, replace: boolean) {
+    const file = editingFile
+    setEditingFile(null)
+    if (!result || !listing || !file) return
+    await browse(listing.path, { path: file.path })
+    setFileAction({
+      message: result.backupPath
+        ? `Saved to ${displayPath(result.outputPath)}. The original backup remains at ${displayPath(result.backupPath)}.`
+        : replace ? `Saved “${file.name}”. The previous version is in Trash.` : `Saved edited video to ${displayPath(result.outputPath)}.`,
+      error: false,
+    })
+  }
+
   const video = probe?.streams?.find(stream => stream.codec_type === 'video')
   const audio = probe?.streams?.find(stream => stream.codec_type === 'audio')
   const pathParts = listing?.path.split(/[\\/]/).filter(Boolean) ?? []
   const directoryCount = listing?.entries.filter(entry => entry.isDirectory).length ?? 0
   const videoCount = listing?.entries.length ? listing.entries.length - directoryCount : 0
+
+  if (editingFile) return <Editor file={editingFile} onExit={(result, replace) => { void finishEditing(result, replace) }} />
 
   return <div className="app-shell">
     <header className="topbar">
@@ -586,6 +598,7 @@ function App() {
         {!inspectorCollapsed && (selected ? <div key={selected.path} className="details-body">
           <VideoPreview file={selected} />
           <div className="selected-file"><span className="selected-file-icon"><Icon name="film" size={27} /></span><div><strong title={selected.name}>{selected.name}</strong><span>{fileSize(selected.size)}</span></div></div>
+          {probe && video && <button className="inspector-edit" onClick={() => setEditingFile(selected)}>Edit video</button>}
           {loading && <div className="notice">Reading video metadata…</div>}
           {error && <div className="notice error" role="alert"><Icon name="info" size={18} /><span>{error}</span><button onClick={() => setError(null)} aria-label="Dismiss error"><Icon name="close" size={15} /></button></div>}
           {probe && <>

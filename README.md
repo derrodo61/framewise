@@ -7,6 +7,8 @@ A local desktop app for browsing folders and inspecting video metadata. Built wi
 - Choose a folder and browse its subfolders and supported video files.
 - Click a video to see container, video, audio, and embedded tag metadata.
 - See a thumbnail in the Inspector and click Play to watch the video in the same space.
+- Right-click a video to move it to the system Trash or Recycle Bin after confirmation.
+- Open the editor from the Inspector, scrub through a video, mark one section to remove, preview the cut, and undo it. Save As creates an MP4; Save replaces an MP4 after rendering and verification.
 - Use the Up and Down arrow keys to move through the file list, including folders and “Go back.” Press Enter to open a focused folder.
 - Collapse either side panel to give the video browser more room. Panel choices are saved locally.
 - Drag the dividers to resize Workspace and Inspector, or focus a divider and use the arrow keys. Widths are saved locally.
@@ -40,4 +42,6 @@ Logs can include local file paths and error details. Review them before sharing 
 
 ## Notes
 
-The selected folder limits what the backend will inspect. Symbolic links are hidden. The app reads videos but does not modify them. Preview thumbnails are cached locally. Inline playback depends on the codecs supported by the operating system's WebView; metadata and the thumbnail can still work when playback cannot. Video editing is outside this first version.
+The selected folder limits which source videos the backend will inspect or edit. Symbolic links are hidden. Preview thumbnails are cached locally. Inline playback depends on the codecs supported by the operating system's WebView; metadata and the thumbnail can still work when playback cannot.
+
+The first editor supports one video track, up to one audio track, and no chapters or other tracks. It re-encodes to 8-bit H.264/AAC in MP4, so quality, HDR appearance, and technical metadata can change. Descriptive container tags are copied and checked before saving; duration is checked against the expected cut. Save As requires a new file name and never overwrites an existing file. Save renders beside the original, verifies the output, and keeps the previous version in Trash; if Trash is unavailable, the app reports the backup path instead. Keep the app open while rendering.
