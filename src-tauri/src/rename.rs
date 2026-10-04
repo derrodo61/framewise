@@ -13,7 +13,7 @@ pub(crate) struct RenameResult {
     renamed_path: String,
 }
 
-fn valid_stem(stem: &str) -> bool {
+pub(crate) fn valid_stem(stem: &str) -> bool {
     if stem.is_empty()
         || stem.trim() != stem
         || stem.ends_with('.')
@@ -78,6 +78,29 @@ fn rename_file(source: &Path, new_stem: &str) -> Result<PathBuf, String> {
     Ok(destination)
 }
 
+fn rename_directory(source: &Path, new_name: &str) -> Result<PathBuf, String> {
+    if !valid_stem(new_name) {
+        return Err(
+            "Choose a valid folder name without path separators or reserved characters.".into(),
+        );
+    }
+    if source
+        .file_name()
+        .is_some_and(|current| current == new_name)
+    {
+        return Err("The folder already has that name.".into());
+    }
+    let destination = source.with_file_name(new_name);
+    match fs::symlink_metadata(&destination) {
+        Ok(_) => return Err("A file or folder with that name already exists.".into()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("Cannot check the new folder name: {error}")),
+    }
+    fs::rename(source, &destination)
+        .map_err(|error| format!("Could not rename folder: {error}"))?;
+    Ok(destination)
+}
+
 #[tauri::command]
 pub(crate) async fn rename_video(
     path: String,
@@ -107,9 +130,38 @@ pub(crate) async fn rename_video(
     .map_err(|error| format!("Rename task failed: {error}"))?
 }
 
+#[tauri::command]
+pub(crate) async fn rename_folder(
+    path: String,
+    new_name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<RenameResult, String> {
+    let file_type = fs::symlink_metadata(&path)
+        .map_err(|error| format!("Cannot open folder: {error}"))?
+        .file_type();
+    if !file_type.is_dir() {
+        return Err("Select a regular folder".into());
+    }
+    let root = selected_root(&state)?;
+    let source = within_root(&path, &state)?;
+    if source == root {
+        return Err("The selected media folder cannot be renamed here.".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let renamed = rename_directory(&source, &new_name)?;
+        let parent = source.parent().ok_or("Cannot find the folder's parent")?;
+        Ok(RenameResult {
+            listing: list_folder(parent, &root)?,
+            renamed_path: renamed.to_string_lossy().into_owned(),
+        })
+    })
+    .await
+    .map_err(|error| format!("Rename task failed: {error}"))?
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{rename_file, valid_stem};
+    use super::{rename_directory, rename_file, valid_stem};
     use std::{
         fs,
         time::{SystemTime, UNIX_EPOCH},
@@ -157,5 +209,28 @@ mod tests {
             assert!(!valid_stem(stem), "accepted {stem:?}");
         }
         assert!(valid_stem("My clip (2)"));
+    }
+
+    #[test]
+    fn folder_rename_keeps_contents_and_rejects_existing_names() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let parent = std::env::temp_dir().join(format!(
+            "framewise-folder-rename-{}-{stamp}",
+            std::process::id()
+        ));
+        let original = parent.join("original");
+        let occupied = parent.join("occupied");
+        fs::create_dir_all(&original).unwrap();
+        fs::create_dir(&occupied).unwrap();
+        fs::write(original.join("clip.mp4"), b"video").unwrap();
+        assert!(rename_directory(&original, "occupied").is_err());
+        assert!(rename_directory(&original, "../outside").is_err());
+        let renamed = rename_directory(&original, "new folder").unwrap();
+        assert_eq!(fs::read(renamed.join("clip.mp4")).unwrap(), b"video");
+        assert!(!original.exists());
+        fs::remove_dir_all(parent).unwrap();
     }
 }

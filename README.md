@@ -5,9 +5,13 @@ A local desktop app for browsing folders and inspecting video metadata. Built wi
 ## What it does
 
 - Choose a folder and browse its subfolders and supported video files.
+- Create a subfolder directly from the media file list.
 - Click a video to see container, video, audio, and embedded tag metadata.
 - See a thumbnail in the Inspector and click Play to watch the video in the same space.
 - Right-click a video to move it to the system Trash or Recycle Bin after confirmation.
+- Right-click a subfolder to move it and its contents to Trash after confirmation.
+- Rename a video or subfolder from its context menu. Video extensions stay unchanged.
+- Select several videos with Ctrl-click or Shift-click (Command-click on macOS), then right-click a selected video and choose Move to. The separate destination window can browse folders, jump to another location, create a folder, and move the selected videos there.
 - Open the editor from the Inspector, scrub through a video, mark one section to remove, preview the cut, and undo it. Save As creates an MP4; Save replaces an MP4 after rendering and verification.
 - Use the Up and Down arrow keys to move through the file list, including folders and “Go back.” Press Enter to open a focused folder.
 - Collapse either side panel to give the video browser more room. Panel choices are saved locally.

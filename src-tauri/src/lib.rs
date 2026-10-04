@@ -1,9 +1,10 @@
 use serde::Serialize;
-use std::{collections::hash_map::DefaultHasher, fs, hash::{Hash, Hasher}, io, path::{Path, PathBuf}, process::{Command, Output}, sync::Mutex, time::UNIX_EPOCH};
+use std::{collections::{hash_map::DefaultHasher, HashSet}, fs, hash::{Hash, Hasher}, io, path::{Path, PathBuf}, process::{Command, Output}, sync::Mutex, time::UNIX_EPOCH};
 use tauri::Manager;
 mod editor;
 mod duplicate;
 mod rename;
+mod move_files;
 #[cfg(desktop)]
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
@@ -25,6 +26,14 @@ struct DirectoryListing {
     path: String,
     parent: Option<String>,
     entries: Vec<FileEntry>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrashBatchResult {
+    listing: DirectoryListing,
+    moved_count: usize,
+    error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -105,22 +114,65 @@ fn list_directory(path: String, state: tauri::State<'_, AppState>) -> Result<Dir
 }
 
 #[tauri::command]
-fn move_video_to_trash(path: String, state: tauri::State<'_, AppState>) -> Result<DirectoryListing, String> {
+async fn move_videos_to_trash(paths: Vec<String>, state: tauri::State<'_, AppState>) -> Result<TrashBatchResult, String> {
+    if paths.is_empty() {
+        return Err("Select at least one video".into());
+    }
+    let root = selected_root(&state)?;
+    let mut files = Vec::new();
+    let mut seen = HashSet::new();
+    let mut parent: Option<PathBuf> = None;
+    for path in paths {
+        let file_type = fs::symlink_metadata(&path)
+            .map_err(|error| format!("Cannot open video: {error}"))?
+            .file_type();
+        if !file_type.is_file() {
+            return Err("Select regular video files".into());
+        }
+        let resolved = within_root(&path, &state)?;
+        if !video_file(&resolved) {
+            return Err("Select supported video files".into());
+        }
+        let folder = resolved.parent().ok_or("Cannot find the video's folder")?;
+        if parent.as_deref().is_some_and(|current| current != folder) {
+            return Err("Selected videos must be in the same folder".into());
+        }
+        parent = Some(folder.to_path_buf());
+        if seen.insert(resolved.clone()) {
+            files.push(resolved);
+        }
+    }
+    let parent = parent.ok_or("Cannot find the videos' folder")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let error = trash::delete_all(&files).err().map(|cause| {
+            log::error!("Could not move every video to Trash: {cause}");
+            format!("Could not move every video to Trash: {cause}")
+        });
+        let moved_count = files.iter().filter(|path| {
+            matches!(fs::symlink_metadata(path), Err(cause) if cause.kind() == io::ErrorKind::NotFound)
+        }).count();
+        let listing = list_folder(&parent, &root)?;
+        Ok(TrashBatchResult { listing, moved_count, error })
+    }).await.map_err(|error| format!("Trash operation failed: {error}"))?
+}
+
+#[tauri::command]
+fn move_folder_to_trash(path: String, state: tauri::State<'_, AppState>) -> Result<DirectoryListing, String> {
     let file_type = fs::symlink_metadata(&path)
-        .map_err(|error| format!("Cannot open video: {error}"))?
+        .map_err(|error| format!("Cannot open folder: {error}"))?
         .file_type();
-    if !file_type.is_file() {
-        return Err("Select a regular video file".into());
+    if !file_type.is_dir() {
+        return Err("Select a regular folder".into());
     }
     let root = selected_root(&state)?;
     let resolved = within_root(&path, &state)?;
-    if !video_file(&resolved) {
-        return Err("Select a supported video file".into());
+    if resolved == root {
+        return Err("The selected media folder cannot be moved to Trash.".into());
     }
-    let parent = resolved.parent().ok_or("Cannot find the video's folder")?;
+    let parent = resolved.parent().ok_or("Cannot find the folder's parent")?;
     trash::delete(&resolved).map_err(|error| {
-        log::error!("Could not move video to Trash: {error}");
-        format!("Could not move video to Trash: {error}")
+        log::error!("Could not move folder to Trash: {error}");
+        format!("Could not move folder to Trash: {error}")
     })?;
     list_folder(parent, &root)
 }
@@ -293,7 +345,8 @@ pub fn run() {
             Ok(())
         })
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![select_root, list_directory, move_video_to_trash, duplicate::duplicate_video, rename::rename_video, inspect_video, prepare_preview, editor::prepare_edit, editor::video_frame_times, editor::export::export_edit])
+        .manage(move_files::MoveState::default())
+        .invoke_handler(tauri::generate_handler![select_root, list_directory, move_videos_to_trash, move_folder_to_trash, duplicate::duplicate_video, rename::rename_video, rename::rename_folder, move_files::begin_move, move_files::move_session, move_files::list_move_directory, move_files::create_move_folder, move_files::create_media_folder, move_files::move_selected, inspect_video, prepare_preview, editor::prepare_edit, editor::video_frame_times, editor::export::export_edit])
         .run(tauri::generate_context!())
         .expect("error while building Tauri application");
 }

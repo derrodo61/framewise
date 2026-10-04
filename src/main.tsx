@@ -4,6 +4,7 @@ import { isTauri } from '@tauri-apps/api/core'
 import { error as logError } from '@tauri-apps/plugin-log'
 import './index.css'
 import App from './App.tsx'
+import MoveWindow from './MoveWindow.tsx'
 
 document.documentElement.dataset.theme = window.localStorage.getItem('framewise.theme') === 'dark' ? 'dark' : 'light'
 
@@ -16,6 +17,6 @@ window.addEventListener('unhandledrejection', event => logUnhandled(`Unhandled U
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    {new URLSearchParams(window.location.search).has('moveTo') ? <MoveWindow /> : <App />}
   </StrictMode>,
 )
