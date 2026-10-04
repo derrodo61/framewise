@@ -36,6 +36,8 @@ GitHub Actions runs these checks on Windows, macOS, and Linux for pushes to `mai
 
 Build an installer on the target OS with `npm run tauri build`. Build and test on Windows, macOS, and Linux separately. The current prototype expects a local `ffprobe` installation; packaging it with the app is a later distribution step and requires checking the FFmpeg build's license terms.
 
+Framewise saves the startup folder, theme, panel layout, and window state in `~/.framewise` (`settings.json` and `window-state.json`). These files are shared by development and installed builds and remain in the user's home folder when the app is upgraded or uninstalled. On first launch, Framewise imports preferences from its earlier WebView storage and copies the previous window state when available.
+
 If `ffprobe` works in a new terminal but Framewise cannot find it, restart the terminal that launches `npm run tauri dev` so it picks up your updated `PATH`. On Windows, Framewise also looks in Windows Package Manager's FFmpeg installation folder. `FFPROBE_PATH` takes precedence over both locations.
 
 ## Error logs

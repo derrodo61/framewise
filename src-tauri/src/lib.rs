@@ -5,6 +5,7 @@ mod editor;
 mod duplicate;
 mod rename;
 mod move_files;
+mod preferences;
 #[cfg(desktop)]
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
@@ -330,7 +331,15 @@ pub fn run() {
             .build())
         .plugin(tauri_plugin_dialog::init());
     #[cfg(desktop)]
-    let builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
+    let builder = {
+        let mut window_state = tauri_plugin_window_state::Builder::default();
+        if let Err(error) = preferences::migrate_window_state() {
+            log::error!("Could not prepare persistent window settings: {error}");
+        } else if let Ok(path) = preferences::window_state_path() {
+            window_state = window_state.with_filename(path.to_string_lossy().into_owned());
+        }
+        builder.plugin(window_state.build())
+    };
     #[cfg(desktop)]
     let builder = builder.on_window_event(|window, event| {
         if let tauri::WindowEvent::CloseRequested { .. } = event
@@ -346,7 +355,7 @@ pub fn run() {
         })
         .manage(AppState::default())
         .manage(move_files::MoveState::default())
-        .invoke_handler(tauri::generate_handler![select_root, list_directory, move_videos_to_trash, move_folder_to_trash, duplicate::duplicate_video, rename::rename_video, rename::rename_folder, move_files::begin_move, move_files::move_session, move_files::list_move_directory, move_files::create_move_folder, move_files::create_media_folder, move_files::move_selected, inspect_video, prepare_preview, editor::prepare_edit, editor::video_frame_times, editor::export::export_edit])
+        .invoke_handler(tauri::generate_handler![select_root, list_directory, move_videos_to_trash, move_folder_to_trash, duplicate::duplicate_video, rename::rename_video, rename::rename_folder, move_files::begin_move, move_files::move_session, move_files::list_move_directory, move_files::create_move_folder, move_files::create_media_folder, move_files::move_selected, preferences::load_preferences, preferences::save_preferences, inspect_video, prepare_preview, editor::prepare_edit, editor::video_frame_times, editor::export::export_edit])
         .run(tauri::generate_context!())
         .expect("error while building Tauri application");
 }

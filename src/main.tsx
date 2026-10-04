@@ -5,8 +5,7 @@ import { error as logError } from '@tauri-apps/plugin-log'
 import './index.css'
 import App from './App.tsx'
 import MoveWindow from './MoveWindow.tsx'
-
-document.documentElement.dataset.theme = window.localStorage.getItem('framewise.theme') === 'dark' ? 'dark' : 'light'
+import { getPreference, initializePreferences } from './preferences'
 
 function logUnhandled(message: string) {
   if (isTauri()) void logError(message).catch(() => {})
@@ -15,8 +14,10 @@ function logUnhandled(message: string) {
 window.addEventListener('error', event => logUnhandled(`Uncaught UI error: ${event.message}`))
 window.addEventListener('unhandledrejection', event => logUnhandled(`Unhandled UI promise rejection: ${String(event.reason)}`))
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    {new URLSearchParams(window.location.search).has('moveTo') ? <MoveWindow /> : <App />}
-  </StrictMode>,
-)
+const isMoveWindow = new URLSearchParams(window.location.search).has('moveTo')
+void initializePreferences(!isMoveWindow).then(() => {
+  document.documentElement.dataset.theme = getPreference('framewise.theme') === 'dark' ? 'dark' : 'light'
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>{isMoveWindow ? <MoveWindow /> : <App />}</StrictMode>,
+  )
+})

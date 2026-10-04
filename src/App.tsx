@@ -9,6 +9,7 @@ import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import Editor from './Editor'
 import type { EditResult } from './Editor'
 import { displayPath, versionedMediaSrc } from './paths'
+import { getPreference, setPreference, removePreference } from './preferences'
 import './App.css'
 import './panels.css'
 import './settings.css'
@@ -99,9 +100,9 @@ function reportError(context: string, cause: unknown) {
   return message
 }
 function display(value: unknown) { return value === undefined || value === null || value === '' ? '—' : String(value) }
-function savedPanelState(key: string) { return window.localStorage.getItem(key) === 'true' }
-function savedPanelWidth(key: string, fallback: number) {
-  const saved = window.localStorage.getItem(key)
+function savedPanelState(key: 'framewise.workspaceCollapsed' | 'framewise.inspectorCollapsed') { return getPreference(key) === 'true' }
+function savedPanelWidth(key: 'framewise.workspaceWidth' | 'framewise.inspectorWidth', fallback: number) {
+  const saved = getPreference(key)
   const width = saved === null ? NaN : Number(saved)
   return Number.isFinite(width) && width > 0 ? width : fallback
 }
@@ -184,9 +185,9 @@ function App() {
   const [folderBusy, setFolderBusy] = useState(false)
   const [view, setView] = useState<'media' | 'settings'>('media')
   const [theme, setTheme] = useState<'light' | 'dark'>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
-  const [defaultFolder, setDefaultFolder] = useState<string | null>(() => window.localStorage.getItem('framewise.defaultFolder'))
+  const [defaultFolder, setDefaultFolder] = useState<string | null>(() => getPreference('framewise.defaultFolder'))
   const [settingsError, setSettingsError] = useState<string | null>(null)
-  const [startupLoading, setStartupLoading] = useState(() => Boolean(window.localStorage.getItem('framewise.defaultFolder')))
+  const [startupLoading, setStartupLoading] = useState(() => Boolean(getPreference('framewise.defaultFolder')))
   const [workspaceCollapsed, setWorkspaceCollapsed] = useState(() => savedPanelState('framewise.workspaceCollapsed'))
   const [inspectorCollapsed, setInspectorCollapsed] = useState(() => savedPanelState('framewise.inspectorCollapsed'))
   const [viewportWidth, setViewportWidth] = useState(window.innerWidth)
@@ -215,7 +216,7 @@ function App() {
   }, [])
 
   useEffect(() => {
-    const saved = window.localStorage.getItem('framewise.defaultFolder')
+    const saved = getPreference('framewise.defaultFolder')
     if (!saved) return
     let active = true
     const currentRequest = ++requestId.current
@@ -224,7 +225,7 @@ function App() {
         if (!active || currentRequest !== requestId.current) return
         setRoot(next.path); setListing(next); setSelected(null); setSelectedPaths([]); selectionAnchor.current = null; setProbe(null)
         if (next.path !== saved) {
-          window.localStorage.setItem('framewise.defaultFolder', next.path)
+          setPreference('framewise.defaultFolder', next.path)
           setDefaultFolder(next.path)
         }
       })
@@ -292,7 +293,7 @@ function App() {
     const width = Math.round(Math.max(min, Math.min(nextWidth, max)))
     if (side === 'left') setWorkspaceWidth(width)
     else setInspectorWidth(width)
-    if (save) window.localStorage.setItem(`framewise.${side === 'left' ? 'workspace' : 'inspector'}Width`, String(width))
+    if (save) setPreference(side === 'left' ? 'framewise.workspaceWidth' : 'framewise.inspectorWidth', String(width))
     return width
   }
 
@@ -315,7 +316,7 @@ function App() {
   function endResize(event: PointerEvent<HTMLDivElement>) {
     if (!drag.current) return
     const { side, lastWidth } = drag.current
-    window.localStorage.setItem(`framewise.${side === 'left' ? 'workspace' : 'inspector'}Width`, String(lastWidth))
+    setPreference(side === 'left' ? 'framewise.workspaceWidth' : 'framewise.inspectorWidth', String(lastWidth))
     drag.current = null
     setResizing(null)
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
@@ -331,14 +332,14 @@ function App() {
 
   function toggleWorkspace() {
     setWorkspaceCollapsed(current => {
-      window.localStorage.setItem('framewise.workspaceCollapsed', String(!current))
+      setPreference('framewise.workspaceCollapsed', String(!current))
       return !current
     })
   }
 
   function toggleInspector() {
     setInspectorCollapsed(current => {
-      window.localStorage.setItem('framewise.inspectorCollapsed', String(!current))
+      setPreference('framewise.inspectorCollapsed', String(!current))
       return !current
     })
   }
@@ -363,7 +364,7 @@ function App() {
       const currentRequest = ++requestId.current
       const next = await selectRoot(path)
       if (currentRequest !== requestId.current) return
-      window.localStorage.setItem('framewise.defaultFolder', next.path)
+      setPreference('framewise.defaultFolder', next.path)
       setDefaultFolder(next.path); setSettingsError(null); setStartupLoading(false)
       setRoot(next.path); setListing(next); setSelected(null); setSelectedPaths([]); selectionAnchor.current = null; setProbe(null); setError(null); setCreatingFolder(false); setNewFolderName('')
     } catch (cause) { setSettingsError(reportError('Choosing startup folder', cause)) }
@@ -372,19 +373,19 @@ function App() {
   function useCurrentAsDefault() {
     if (!root) return
     requestId.current++
-    window.localStorage.setItem('framewise.defaultFolder', root)
+    setPreference('framewise.defaultFolder', root)
     setDefaultFolder(root); setSettingsError(null); setStartupLoading(false)
   }
 
   function clearDefaultFolder() {
     requestId.current++
-    window.localStorage.removeItem('framewise.defaultFolder')
+    removePreference('framewise.defaultFolder')
     setDefaultFolder(null); setSettingsError(null); setStartupLoading(false)
   }
 
   function chooseTheme(nextTheme: 'light' | 'dark') {
     document.documentElement.dataset.theme = nextTheme
-    window.localStorage.setItem('framewise.theme', nextTheme)
+    setPreference('framewise.theme', nextTheme)
     setTheme(nextTheme)
   }
 
