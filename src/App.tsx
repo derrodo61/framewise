@@ -6,6 +6,7 @@ import './App.css'
 import './panels.css'
 import './settings.css'
 import './navigation.css'
+import './theme.css'
 
 type FileEntry = { name: string; path: string; isDirectory: boolean; size: number | null }
 type DirectoryListing = { path: string; parent: string | null; entries: FileEntry[] }
@@ -22,7 +23,7 @@ type Probe = {
   chapters?: unknown[]
 }
 
-function Icon({ name, size = 20 }: { name: 'folder' | 'film' | 'chevron' | 'arrow' | 'info' | 'refresh' | 'copy' | 'check' | 'close' | 'settings'; size?: number }) {
+function Icon({ name, size = 20 }: { name: 'folder' | 'film' | 'chevron' | 'arrow' | 'info' | 'refresh' | 'copy' | 'check' | 'close' | 'settings' | 'sun' | 'moon'; size?: number }) {
   const paths: Record<typeof name, React.ReactNode> = {
     folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
     film: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 4v16M17 4v16M3 9h4m-4 6h4m10-6h4m-4 6h4" /></>,
@@ -34,6 +35,8 @@ function Icon({ name, size = 20 }: { name: 'folder' | 'film' | 'chevron' | 'arro
     check: <path d="m5 12 4 4L19 6" />,
     close: <path d="M6 6l12 12M18 6 6 18" />,
     settings: <><path d="M4 7h16M4 12h16M4 17h16" /><circle cx="9" cy="7" r="2" fill="white" /><circle cx="16" cy="12" r="2" fill="white" /><circle cx="10" cy="17" r="2" fill="white" /></>,
+    sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" /></>,
+    moon: <path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5Z" />,
   }
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>
 }
@@ -98,6 +101,7 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [copyDone, setCopyDone] = useState(false)
   const [view, setView] = useState<'media' | 'settings'>('media')
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
   const [defaultFolder, setDefaultFolder] = useState<string | null>(() => window.localStorage.getItem('framewise.defaultFolder'))
   const [settingsError, setSettingsError] = useState<string | null>(null)
   const [startupLoading, setStartupLoading] = useState(() => Boolean(window.localStorage.getItem('framewise.defaultFolder')))
@@ -267,6 +271,12 @@ function App() {
     setDefaultFolder(null); setSettingsError(null); setStartupLoading(false)
   }
 
+  function chooseTheme(nextTheme: 'light' | 'dark') {
+    document.documentElement.dataset.theme = nextTheme
+    window.localStorage.setItem('framewise.theme', nextTheme)
+    setTheme(nextTheme)
+  }
+
   async function browse(path: string, focusTarget?: { path?: string }) {
     try {
       const currentRequest = ++requestId.current
@@ -370,8 +380,21 @@ function App() {
           <div className="content-heading">
             <div className="eyebrow">PREFERENCES</div>
             <h1>Settings</h1>
-            <p>Choose how Framewise starts on this computer.</p>
+            <p>Choose how Framewise looks and starts on this computer.</p>
           </div>
+          <section className="settings-card" aria-labelledby="appearance-heading">
+            <div className="settings-card-heading"><div className="settings-card-icon"><Icon name="sun" size={22} /></div><div><h2 id="appearance-heading">Appearance</h2><p>Choose the color theme for Framewise.</p></div></div>
+            <div className="theme-options" role="radiogroup" aria-labelledby="appearance-heading">
+              <label className={`theme-option ${theme === 'light' ? 'selected' : ''}`}>
+                <input type="radio" name="theme" value="light" checked={theme === 'light'} onChange={() => chooseTheme('light')} />
+                <Icon name="sun" size={21} /><span>Light</span>
+              </label>
+              <label className={`theme-option ${theme === 'dark' ? 'selected' : ''}`}>
+                <input type="radio" name="theme" value="dark" checked={theme === 'dark'} onChange={() => chooseTheme('dark')} />
+                <Icon name="moon" size={21} /><span>Dark</span>
+              </label>
+            </div>
+          </section>
           <section className="settings-card" aria-labelledby="startup-folder-heading">
             <div className="settings-card-heading"><div className="settings-card-icon"><Icon name="folder" size={22} /></div><div><h2 id="startup-folder-heading">Startup folder</h2><p>Open this folder automatically when Framewise starts.</p></div></div>
             <div className="setting-label">SELECTED FOLDER</div>

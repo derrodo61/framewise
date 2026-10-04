@@ -71,3 +71,25 @@
 .settings-error { display: flex; align-items: flex-start; gap: 8px; margin-top: 14px; padding: 11px; border-radius: 7px; background: #fff1f1; color: #a43f45; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .settings-error svg { flex-shrink: 0; }
 .settings-loading { margin-top: 12px; font-size: 11px; color: #5575a5; }
+
+.settings-card + .settings-card { margin-top: 18px; }
+.theme-options { display: flex; gap: 12px; margin-top: 24px; }
+.theme-option {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #e5ebf2;
+  border-radius: 9px;
+  background: #f8fafc;
+  color: #526175;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+}
+.theme-option.selected { border-color: #7ba7f5; background: #edf4ff; color: #245fc4; }
+.theme-option input { accent-color: #2563eb; margin: 0; }
+.theme-option:focus-within { outline: 2px solid #7ba7f5; outline-offset: 2px; }
+@media (max-width: 850px) { .theme-options { flex-direction: column; } }
