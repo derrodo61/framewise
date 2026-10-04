@@ -1,0 +1,35 @@
+.preview-section { margin-bottom: 24px; }
+.preview-title { margin-top: 0; }
+.preview-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 10px;
+  background: #111827;
+  display: grid;
+  place-items: center;
+}
+.preview-frame img,
+.preview-frame video { position: absolute; inset: 0; width: 100%; height: 100%; display: block; object-fit: contain; }
+.preview-frame:not(.is-playing) video { opacity: 0; pointer-events: none; }
+.preview-placeholder { color: #788ca9; }
+.preview-play {
+  position: absolute;
+  z-index: 1;
+  width: 50px;
+  height: 50px;
+  display: grid;
+  place-items: center;
+  padding: 0 0 0 3px;
+  border: 0;
+  border-radius: 50%;
+  background: #2563eb;
+  color: white;
+  box-shadow: 0 4px 20px #0008;
+}
+.preview-play:hover { background: #1d58d1; }
+.preview-play:focus-visible { outline: 3px solid white; outline-offset: 3px; }
+.preview-loading { position: absolute; bottom: 12px; color: #c6d2e3; font-size: 11px; }
+.preview-message { margin-top: 9px; color: #8b9aac; font-size: 11px; line-height: 1.5; }
+[data-theme='dark'] .preview-message { color: #a4b2c6; }

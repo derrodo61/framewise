@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties, KeyboardEvent, PointerEvent } from 'react'
-import { invoke, isTauri } from '@tauri-apps/api/core'
+import { convertFileSrc, invoke, isTauri } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { error as logError } from '@tauri-apps/plugin-log'
 import './App.css'
@@ -8,6 +8,7 @@ import './panels.css'
 import './settings.css'
 import './navigation.css'
 import './theme.css'
+import './preview.css'
 
 type FileEntry = { name: string; path: string; isDirectory: boolean; size: number | null }
 type DirectoryListing = { path: string; parent: string | null; entries: FileEntry[] }
@@ -23,8 +24,9 @@ type Probe = {
   streams?: ProbeStream[]
   chapters?: unknown[]
 }
+type Preview = { videoPath: string; thumbnailPath: string | null }
 
-function Icon({ name, size = 20 }: { name: 'folder' | 'film' | 'chevron' | 'arrow' | 'info' | 'refresh' | 'copy' | 'check' | 'close' | 'settings' | 'sun' | 'moon'; size?: number }) {
+function Icon({ name, size = 20 }: { name: 'folder' | 'film' | 'chevron' | 'arrow' | 'info' | 'refresh' | 'copy' | 'check' | 'close' | 'settings' | 'sun' | 'moon' | 'play'; size?: number }) {
   const paths: Record<typeof name, React.ReactNode> = {
     folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
     film: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 4v16M17 4v16M3 9h4m-4 6h4m10-6h4m-4 6h4" /></>,
@@ -38,6 +40,7 @@ function Icon({ name, size = 20 }: { name: 'folder' | 'film' | 'chevron' | 'arro
     settings: <><path d="M4 7h16M4 12h16M4 17h16" /><circle cx="9" cy="7" r="2" fill="white" /><circle cx="16" cy="12" r="2" fill="white" /><circle cx="10" cy="17" r="2" fill="white" /></>,
     sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" /></>,
     moon: <path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5Z" />,
+    play: <path d="m8 5 11 7-11 7z" fill="currentColor" stroke="none" />,
   }
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>
 }
@@ -96,6 +99,46 @@ type PanelSide = 'left' | 'right'
 
 function Property({ label, value }: { label: string; value: unknown }) {
   return <div className="property"><dt>{label}</dt><dd>{display(value)}</dd></div>
+}
+
+function VideoPreview({ file }: { file: FileEntry }) {
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const [preview, setPreview] = useState<Preview | null>(null)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+  const [playing, setPlaying] = useState(false)
+  const [playbackError, setPlaybackError] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    const timer = window.setTimeout(() => {
+      invoke<Preview>('prepare_preview', { path: file.path })
+        .then(result => { if (active) setPreview(result) })
+        .catch(cause => { if (active) setPreviewError(reportError('Preparing video preview', cause)) })
+    }, 120)
+    return () => { active = false; window.clearTimeout(timer) }
+  }, [file.path])
+
+  const videoUrl = preview ? convertFileSrc(preview.videoPath) : null
+  const thumbnailUrl = preview?.thumbnailPath ? convertFileSrc(preview.thumbnailPath) : null
+
+  function startPlayback() {
+    if (!videoRef.current) return
+    setPlaybackError(false)
+    setPlaying(true)
+    void videoRef.current.play().catch(() => { setPlaying(false); setPlaybackError(true) })
+  }
+
+  return <section className="preview-section" aria-label="Video preview">
+    <div className="section-title preview-title">PREVIEW</div>
+    <div className={`preview-frame ${playing ? 'is-playing' : ''}`}>
+      {videoUrl && <video ref={videoRef} src={videoUrl} poster={thumbnailUrl ?? undefined} preload="none" controls={playing} playsInline onError={() => { setPlaying(false); setPlaybackError(true) }} aria-label={`Playing ${file.name}`} />}
+      {!playing && (thumbnailUrl ? <img src={thumbnailUrl} alt={`Preview frame from ${file.name}`} /> : <div className="preview-placeholder"><Icon name="film" size={36} /></div>)}
+      {preview && !playing && <button className="preview-play" onClick={startPlayback} aria-label={`Play ${file.name}`}><Icon name="play" size={24} /></button>}
+      {!preview && !previewError && <span className="preview-loading">Preparing preview…</span>}
+    </div>
+    {previewError && <p className="preview-message" role="alert">Preview unavailable: {previewError}</p>}
+    {playbackError && <p className="preview-message" role="alert">This video format may not play in the system WebView. The metadata remains available below.</p>}
+  </section>
 }
 
 function App() {
@@ -452,6 +495,7 @@ function App() {
           <button className="panel-toggle inspector-toggle" onClick={toggleInspector} aria-label={inspectorCollapsed ? 'Expand inspector' : 'Collapse inspector'} aria-expanded={!inspectorCollapsed} title={inspectorCollapsed ? 'Expand inspector' : 'Collapse inspector'}><Icon name="chevron" size={17} /></button></div>
         </div>
         {!inspectorCollapsed && (selected ? <div className="details-body">
+          <VideoPreview key={selected.path} file={selected} />
           <div className="selected-file"><span className="selected-file-icon"><Icon name="film" size={27} /></span><div><strong title={selected.name}>{selected.name}</strong><span>{fileSize(selected.size)}</span></div></div>
           {loading && <div className="notice">Reading video metadata…</div>}
           {error && <div className="notice error" role="alert"><Icon name="info" size={18} /><span>{error}</span><button onClick={() => setError(null)} aria-label="Dismiss error"><Icon name="close" size={15} /></button></div>}

@@ -6,6 +6,7 @@ A local desktop app for browsing folders and inspecting video metadata. Built wi
 
 - Choose a folder and browse its subfolders and supported video files.
 - Click a video to see container, video, audio, and embedded tag metadata.
+- See a thumbnail in the Inspector and click Play to watch the video in the same space.
 - Use the Up and Down arrow keys to move through the file list, including folders and “Go back.” Press Enter to open a focused folder.
 - Collapse either side panel to give the video browser more room. Panel choices are saved locally.
 - Drag the dividers to resize Workspace and Inspector, or focus a divider and use the arrow keys. Widths are saved locally.
@@ -16,7 +17,7 @@ A local desktop app for browsing folders and inspecting video metadata. Built wi
 
 ## Run locally
 
-Install [Node.js](https://nodejs.org/), the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS, and [FFmpeg](https://ffmpeg.org/download.html) (which includes `ffprobe`). Make sure `ffprobe` is on `PATH`, or set `FFPROBE_PATH` to the full executable path.
+Install [Node.js](https://nodejs.org/), the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS, and [FFmpeg](https://ffmpeg.org/download.html) (which includes `ffprobe`). Make sure `ffmpeg` and `ffprobe` are on `PATH`, or set `FFMPEG_PATH` and `FFPROBE_PATH` to their full executable paths.
 
 ```sh
 npm install
@@ -39,4 +40,4 @@ Logs can include local file paths and error details. Review them before sharing 
 
 ## Notes
 
-The selected folder limits what the backend will inspect. Symbolic links are hidden. The app reads files but does not modify them. Video preview and editing are outside this first version.
+The selected folder limits what the backend will inspect. Symbolic links are hidden. The app reads videos but does not modify them. Preview thumbnails are cached locally. Inline playback depends on the codecs supported by the operating system's WebView; metadata and the thumbnail can still work when playback cannot. Video editing is outside this first version.
