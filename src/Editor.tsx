@@ -8,7 +8,7 @@ import { displayPath } from './paths'
 import './editor.css'
 
 type EditorFile = { name: string; path: string }
-type EditSource = { videoPath: string; duration: number; hasAudio: boolean; sourceSignature: string }
+type EditSource = { videoPath: string; duration: number; frameRate: number | null; frameCount: number | null; hasAudio: boolean; sourceSignature: string }
 export type EditResult = { outputPath: string; backupPath: string | null }
 type EditProgress = { source: string; percent: number }
 
@@ -49,6 +49,9 @@ export default function Editor({ file, onExit, onSaved }: { file: EditorFile; on
   }, [file.path])
 
   const duration = source?.duration ?? 0
+  const frameRate = source?.frameRate && Number.isFinite(source.frameRate) && source.frameRate > 0 ? source.frameRate : null
+  const lastFrameIndex = frameRate ? Math.max(0, Math.min((source?.frameCount ?? Math.ceil(duration * frameRate)) - 1, Math.ceil(duration * frameRate - 0.0001) - 1)) : 0
+  const lastFrameTime = frameRate ? lastFrameIndex / frameRate : 0
   const validCut = cutStart !== null && cutEnd !== null && cutEnd - cutStart >= 0.01 && duration - (cutEnd - cutStart) >= 0.2
 
   function seek(value: number) {
@@ -106,6 +109,16 @@ export default function Editor({ file, onExit, onSaved }: { file: EditorFile; on
   function playAgain() {
     seek(0)
     startPlayback()
+  }
+
+  function stepFrame(direction: -1 | 1) {
+    const video = videoRef.current
+    if (!video || !frameRate) return
+    video.pause()
+    const position = video.currentTime * frameRate
+    const index = direction < 0 ? Math.ceil(position - 0.0001) - 1 : Math.floor(position + 0.0001) + 1
+    if (direction > 0 && position >= lastFrameIndex - 0.0001) return
+    seek(Math.max(0, Math.min(index, lastFrameIndex)) / frameRate)
   }
 
   function applyCut() {
@@ -197,14 +210,16 @@ export default function Editor({ file, onExit, onSaved }: { file: EditorFile; on
       {error && <div className="editor-error" role="alert">{error}</div>}
       {busy && <div className="editor-progress" role="status"><span>Rendering MP4… {Math.round(progress)}%</span><progress max="100" value={progress} /></div>}
       {source && <section className="editor-controls" aria-label="Edit controls">
-        <div className="editor-time-line"><strong>{timecode(playhead)}</strong><span>of {timecode(duration)}</span></div>
+        <div className="editor-time-line"><strong>{timecode(playhead)}</strong><span>of {timecode(duration)}</span>{frameRate && <span className="editor-frame-position">Frame {Math.min(lastFrameIndex, Math.round(playhead * frameRate)) + 1} of {lastFrameIndex + 1}</span>}</div>
         <div className="editor-track-wrap">
           {cutStart !== null && cutEnd !== null && cutEnd > cutStart && <div className={`editor-cut-overlay ${cutApplied ? 'applied' : ''}`} style={{ left: `${100 * cutStart / duration}%`, width: `${100 * (cutEnd - cutStart) / duration}%` }} />}
-          <input type="range" min="0" max={duration} step="0.01" value={Math.min(playhead, duration)} onChange={event => seek(Number(event.target.value))} aria-label="Scrub through video" disabled={busy} />
+          <input type="range" min="0" max={duration} step="any" value={Math.min(playhead, duration)} onChange={event => seek(Number(event.target.value))} aria-label="Scrub through video" disabled={busy} />
         </div>
         <div className="editor-playback-controls" role="group" aria-label="Playback controls">
           <button type="button" onClick={playAgain} disabled={busy}>Play again</button>
           <button type="button" onClick={() => seek(0)} disabled={busy}>Move to start</button>
+          <button type="button" onClick={() => stepFrame(-1)} disabled={busy || !frameRate || playhead <= 0} title={frameRate ? undefined : 'Frame rate unavailable for this video'} aria-label="Back one frame">← 1 frame</button>
+          <button type="button" onClick={() => stepFrame(1)} disabled={busy || !frameRate || playhead >= lastFrameTime - 0.0001} title={frameRate ? undefined : 'Frame rate unavailable for this video'} aria-label="Forward one frame">1 frame →</button>
           <button type="button" className="editor-play" onClick={togglePlayback} disabled={busy}>{playing ? 'Pause' : 'Play'}</button>
         </div>
         <div className="editor-range-actions">

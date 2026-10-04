@@ -17,6 +17,8 @@ use crate::{AppState, run_ffprobe, video_file, within_root};
 pub(crate) struct EditSource {
     video_path: String,
     duration: f64,
+    frame_rate: Option<f64>,
+    frame_count: Option<u64>,
     has_audio: bool,
     source_signature: String,
 }
@@ -37,8 +39,20 @@ struct EditProgress {
 
 struct MediaInfo {
     duration: f64,
+    frame_rate: Option<f64>,
+    frame_count: Option<u64>,
     has_audio: bool,
     tags: BTreeMap<String, String>,
+}
+
+fn parse_frame_rate(rate: &str) -> Option<f64> {
+    let value = match rate.split_once('/') {
+        Some((numerator, denominator)) => {
+            numerator.parse::<f64>().ok()? / denominator.parse::<f64>().ok()?
+        }
+        None => rate.parse::<f64>().ok()?,
+    };
+    (value.is_finite() && value > 0.0 && value <= 1000.0).then_some(value)
 }
 
 fn inspect(path: &Path) -> Result<MediaInfo, String> {
@@ -62,6 +76,9 @@ fn inspect(path: &Path) -> Result<MediaInfo, String> {
         .iter()
         .filter(|stream| stream["codec_type"] == "audio")
         .count();
+    let video_stream = streams
+        .iter()
+        .find(|stream| stream["codec_type"] == "video");
     if video_count != 1 || audio_count > 1 || streams.len() != video_count + audio_count {
         return Err("This editor supports one video track and up to one audio track, without subtitles or extra tracks.".into());
     }
@@ -73,12 +90,7 @@ fn inspect(path: &Path) -> Result<MediaInfo, String> {
     }
     let duration = value["format"]["duration"]
         .as_str()
-        .or_else(|| {
-            streams
-                .iter()
-                .find(|stream| stream["codec_type"] == "video")
-                .and_then(|stream| stream["duration"].as_str())
-        })
+        .or_else(|| video_stream.and_then(|stream| stream["duration"].as_str()))
         .and_then(|text| text.parse::<f64>().ok())
         .ok_or("The video duration is unavailable")?;
     if !duration.is_finite() || duration <= 0.2 {
@@ -96,6 +108,16 @@ fn inspect(path: &Path) -> Result<MediaInfo, String> {
         .unwrap_or_default();
     Ok(MediaInfo {
         duration,
+        frame_rate: video_stream.and_then(|stream| {
+            stream["avg_frame_rate"]
+                .as_str()
+                .and_then(parse_frame_rate)
+                .or_else(|| stream["r_frame_rate"].as_str().and_then(parse_frame_rate))
+        }),
+        frame_count: video_stream
+            .and_then(|stream| stream["nb_frames"].as_str())
+            .and_then(|count| count.parse::<u64>().ok())
+            .filter(|count| *count > 0),
         has_audio: audio_count == 1,
         tags,
     })
@@ -128,6 +150,8 @@ pub(crate) fn prepare_edit(
     Ok(EditSource {
         video_path: source.to_string_lossy().into_owned(),
         duration: info.duration,
+        frame_rate: info.frame_rate,
+        frame_count: info.frame_count,
         has_audio: info.has_audio,
         source_signature: signature(&source)?,
     })
@@ -550,7 +574,15 @@ pub(crate) async fn export_edit(
 
 #[cfg(test)]
 mod tests {
-    use super::{filter_graph, validate_cut};
+    use super::{filter_graph, parse_frame_rate, validate_cut};
+
+    #[test]
+    fn frame_rate_accepts_video_ratios_and_rejects_missing_rates() {
+        assert!((parse_frame_rate("30000/1001").unwrap() - 29.970_029_97).abs() < 0.000_01);
+        assert_eq!(parse_frame_rate("24/1"), Some(24.0));
+        assert_eq!(parse_frame_rate("0/0"), None);
+        assert_eq!(parse_frame_rate("N/A"), None);
+    }
 
     #[test]
     fn cut_must_leave_playable_video() {
