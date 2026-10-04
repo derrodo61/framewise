@@ -41,6 +41,7 @@
 .editor-cut-ready strong { font-size: 13px; }
 .editor-note { margin-top: 23px; color: #8a98aa; font-size: 11px; line-height: 1.6; }
 .editor-error { width: min(100%, 960px); margin: 14px auto 0; padding: 12px 14px; border-radius: 8px; background: #fff1f1; color: #a43f45; font-size: 12px; }
+.editor-saved { width: min(100%, 960px); margin: 14px auto 0; padding: 12px 14px; border: 1px solid #9dd8bd; border-radius: 8px; background: #eaf8f0; color: #206445; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .editor-progress { width: min(100%, 960px); display: flex; align-items: center; gap: 14px; margin: 14px auto 0; color: #526780; font-size: 12px; }
 .editor-progress progress { flex: 1; height: 12px; accent-color: #2563eb; }
 .inspector-edit { display: block; width: 100%; margin: 16px 0 8px; padding: 10px; border: 1px solid #bed5fc; border-radius: 8px; background: #eaf2ff; color: #245fc4; font-size: 12px; font-weight: 700; }
@@ -59,5 +60,6 @@
 [data-theme='dark'] .editor-time-line,[data-theme='dark'] .editor-marker label,[data-theme='dark'] .editor-marker span,[data-theme='dark'] .editor-cut-hint,[data-theme='dark'] .editor-note { color: #a4b2c6; }
 [data-theme='dark'] .editor-cut-ready { border-color: #366b55; background: #1b382d; color: #b2e8c9; }
 [data-theme='dark'] .editor-error { background: #452b35; color: #ffb9c4; }
+[data-theme='dark'] .editor-saved { border-color: #366b55; background: #1b382d; color: #b2e8c9; }
 [data-theme='dark'] .inspector-edit { border-color: #345f9e; background: #253b59; color: #b7d1ff; }
 @media(max-width:800px){.editor-header{gap:12px;padding:12px 16px}.editor-main{padding:16px}.editor-controls{padding:18px}.editor-marker{min-width:0;flex:1}.editor-heading h1{font-size:15px}}

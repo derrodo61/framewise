@@ -489,13 +489,20 @@ function App() {
     })
   }
 
+  async function savedEditing(result: EditResult) {
+    const file = editingFile
+    if (!listing || !file) return
+    await browse(listing.path, { path: file.path })
+    setFileAction({ message: `Saved edited video to ${displayPath(result.outputPath)}.`, error: false })
+  }
+
   const video = probe?.streams?.find(stream => stream.codec_type === 'video')
   const audio = probe?.streams?.find(stream => stream.codec_type === 'audio')
   const pathParts = listing?.path.split(/[\\/]/).filter(Boolean) ?? []
   const directoryCount = listing?.entries.filter(entry => entry.isDirectory).length ?? 0
   const videoCount = listing?.entries.length ? listing.entries.length - directoryCount : 0
 
-  if (editingFile) return <Editor file={editingFile} onExit={(result, replace) => { void finishEditing(result, replace) }} />
+  if (editingFile) return <Editor file={editingFile} onExit={(result, replace) => { void finishEditing(result, replace) }} onSaved={result => { void savedEditing(result) }} />
 
   return <div className="app-shell">
     <header className="topbar">

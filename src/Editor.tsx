@@ -25,14 +25,16 @@ function reportError(context: string, cause: unknown) {
   return message
 }
 
-export default function Editor({ file, onExit }: { file: EditorFile; onExit: (result: EditResult | null, replace: boolean) => void }) {
+export default function Editor({ file, onExit, onSaved }: { file: EditorFile; onExit: (result: EditResult | null, replace: boolean) => void; onSaved: (result: EditResult) => void }) {
   const [source, setSource] = useState<EditSource | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [savedResult, setSavedResult] = useState<EditResult | null>(null)
   const [videoMounted, setVideoMounted] = useState(true)
   const [playhead, setPlayhead] = useState(0)
   const [cutStart, setCutStart] = useState<number | null>(null)
   const [cutEnd, setCutEnd] = useState<number | null>(null)
   const [cutApplied, setCutApplied] = useState(false)
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [playing, setPlaying] = useState(false)
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState(0)
@@ -56,13 +58,19 @@ export default function Editor({ file, onExit }: { file: EditorFile; onExit: (re
   }
 
   function updateStart(value: number | null) {
-    setCutStart(value === null ? null : Math.min(Math.max(value, 0), duration))
+    const next = value === null ? null : Math.min(Math.max(value, 0), duration)
+    setCutStart(next)
     setCutApplied(false)
+    setHasUnsavedChanges(next !== null || cutEnd !== null)
+    setSavedResult(null)
   }
 
   function updateEnd(value: number | null) {
-    setCutEnd(value === null ? null : Math.min(Math.max(value, 0), duration))
+    const next = value === null ? null : Math.min(Math.max(value, 0), duration)
+    setCutEnd(next)
     setCutApplied(false)
+    setHasUnsavedChanges(cutStart !== null || next !== null)
+    setSavedResult(null)
   }
 
   function previewTime() {
@@ -113,11 +121,13 @@ export default function Editor({ file, onExit }: { file: EditorFile; onExit: (re
     setCutApplied(false)
     setCutStart(null)
     setCutEnd(null)
+    setHasUnsavedChanges(false)
+    setSavedResult(null)
   }
 
   async function leave() {
     if (busy) return
-    if (cutStart !== null || cutEnd !== null) {
+    if (hasUnsavedChanges) {
       try {
         if (!await ask('Discard your unsaved edit?', { title: 'Leave editor', kind: 'warning', okLabel: 'Discard edit', cancelLabel: 'Keep editing' })) return
       } catch (cause) { setError(reportError('Leaving video editor', cause)); return }
@@ -139,6 +149,7 @@ export default function Editor({ file, onExit }: { file: EditorFile; onExit: (re
         destination = chosen
       }
       setBusy(true)
+      setSavedResult(null)
       setProgress(0)
       const unlisten = await listen<EditProgress>('edit-progress', event => {
         if (event.payload.source === source.videoPath) setProgress(event.payload.percent)
@@ -150,7 +161,16 @@ export default function Editor({ file, onExit }: { file: EditorFile; onExit: (re
           path: file.path, destination, sourceSignature: source.sourceSignature,
           start: cutStart, end: cutEnd, replace,
         })
-        onExit(result, replace)
+        if (replace) onExit(result, true)
+        else {
+          setVideoMounted(true)
+          setPlayhead(0)
+          setPlaying(false)
+          setBusy(false)
+          setHasUnsavedChanges(false)
+          setSavedResult(result)
+          onSaved(result)
+        }
       } finally { unlisten() }
     } catch (cause) {
       setError(reportError('Saving edited video', cause))
@@ -173,6 +193,7 @@ export default function Editor({ file, onExit }: { file: EditorFile; onExit: (re
       <div className="editor-video-wrap">
         {source && videoMounted ? <video ref={videoRef} src={convertFileSrc(source.videoPath)} controls playsInline preload="metadata" onTimeUpdate={previewTime} onSeeked={previewTime} onPlay={() => { setPlaying(true); previewTime() }} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} aria-label={`Preview ${file.name}`} /> : <div className="editor-video-placeholder">{busy ? 'Rendering your edited video…' : source ? 'Preview paused' : error ? 'Editor unavailable for this video' : 'Opening video…'}</div>}
       </div>
+      {savedResult && <div className="editor-saved" role="status">Saved as {displayPath(savedResult.outputPath)}. Continue editing the original video here.</div>}
       {error && <div className="editor-error" role="alert">{error}</div>}
       {busy && <div className="editor-progress" role="status"><span>Rendering MP4… {Math.round(progress)}%</span><progress max="100" value={progress} /></div>}
       {source && <section className="editor-controls" aria-label="Edit controls">
