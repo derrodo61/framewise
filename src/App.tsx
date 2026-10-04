@@ -5,6 +5,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import './App.css'
 import './panels.css'
 import './settings.css'
+import './navigation.css'
 
 type FileEntry = { name: string; path: string; isDirectory: boolean; size: number | null }
 type DirectoryListing = { path: string; parent: string | null; entries: FileEntry[] }
@@ -261,10 +262,14 @@ function App() {
     } catch (cause) { setError(errorText(cause)) }
   }
 
-  async function selectFile(file: FileEntry) {
+  async function selectFile(file: FileEntry, delayMs = 0) {
     const currentRequest = ++requestId.current
     setSelected(file); setProbe(null); setError(null); setLoading(true)
     try {
+      if (delayMs) {
+        await new Promise(resolve => window.setTimeout(resolve, delayMs))
+        if (currentRequest !== requestId.current) return
+      }
       const result = await invoke<Probe>('inspect_video', { path: file.path })
       if (currentRequest === requestId.current) setProbe(result)
     } catch (cause) {
@@ -272,6 +277,22 @@ function App() {
     } finally {
       if (currentRequest === requestId.current) setLoading(false)
     }
+  }
+
+  function navigateVideos(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+    const focused = event.target instanceof HTMLElement ? event.target.closest<HTMLButtonElement>('[data-video-row]') : null
+    if (!focused || !event.currentTarget.contains(focused)) return
+    const rows = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[data-video-row]'))
+    const currentIndex = rows.indexOf(focused)
+    if (currentIndex < 0) return
+    event.preventDefault()
+    const nextIndex = Math.max(0, Math.min(rows.length - 1, currentIndex + (event.key === 'ArrowDown' ? 1 : -1)))
+    if (nextIndex === currentIndex) return
+    const next = listing?.entries.filter(entry => !entry.isDirectory)[nextIndex]
+    if (!next) return
+    rows[nextIndex].focus()
+    void selectFile(next, 120)
   }
 
   async function copyMetadata() {
@@ -352,15 +373,16 @@ function App() {
         </div> : <>
           <div className="breadcrumb"><button onClick={() => root && browse(root)}>{root?.split(/[\\/]/).filter(Boolean).at(-1) || 'Root'}</button>{listing.path !== root && <><Icon name="chevron" size={14} /><span>{pathParts.at(-1)}</span></>}</div>
           <div className="browser-toolbar"><span>{directoryCount} {directoryCount === 1 ? 'folder' : 'folders'} <span className="dot-separator">·</span> {videoCount} {videoCount === 1 ? 'video' : 'videos'}</span><button title="Refresh folder" aria-label="Refresh folder" onClick={() => browse(listing.path)}><Icon name="refresh" size={17} /></button></div>
-          <div className="file-list">
+          <div className="file-list" role="group" aria-label="Files and folders" onKeyDown={navigateVideos}>
             {listing.parent && <button className="file-row back-row" onClick={() => browse(listing.parent!)}><span className="file-icon"><Icon name="arrow" size={18} /></span><span className="file-name">Go back</span></button>}
-            {listing.entries.map(entry => <button key={entry.path} className={`file-row ${selected?.path === entry.path ? 'selected' : ''}`} onClick={() => entry.isDirectory ? browse(entry.path) : selectFile(entry)}>
+            {listing.entries.map(entry => <button key={entry.path} data-video-row={entry.isDirectory ? undefined : 'true'} className={`file-row ${selected?.path === entry.path ? 'selected' : ''}`} onClick={() => entry.isDirectory ? browse(entry.path) : selectFile(entry)}>
               <span className={`file-icon ${entry.isDirectory ? 'folder-icon' : 'video-icon'}`}><Icon name={entry.isDirectory ? 'folder' : 'film'} size={19} /></span>
               <span className="file-name" title={entry.name}>{entry.name}</span>
               <span className="file-kind">{entry.isDirectory ? 'Folder' : fileSize(entry.size)}</span>
               <Icon name="chevron" size={16} />
             </button>)}
             {listing.entries.length === 0 && <div className="empty-list">No folders or supported video files here.</div>}
+            {videoCount > 1 && <div className="file-list-tip">Tip: Use ↑ and ↓ to move between videos.</div>}
           </div>
         </>}
         </>}
