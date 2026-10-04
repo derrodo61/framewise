@@ -1,0 +1,73 @@
+.sidebar-settings,
+.sidebar-media {
+  margin-top: auto;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 13px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #718197;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.sidebar-media { margin-top: 0; }
+
+.sidebar-settings:hover,
+.sidebar-settings.active,
+.sidebar-media:hover,
+.sidebar-media.active,
+.settings-rail.active,
+.media-rail.active {
+  background: #eaf2ff;
+  color: #245fc4;
+}
+
+.sidebar .sidebar-bottom { margin-top: 12px; }
+.sidebar .settings-rail { margin-top: auto; }
+.sidebar .media-rail { margin-bottom: 10px; }
+.sidebar-media + .root-item,
+.sidebar-media + .sidebar-hint { margin-top: 10px; }
+
+.settings-card {
+  margin-top: 38px;
+  padding: 26px;
+  background: #fff;
+  border: 1px solid #e7edf4;
+  border-radius: 13px;
+  box-shadow: 0 6px 25px #17244305;
+}
+
+.settings-card-heading { display: flex; align-items: center; gap: 14px; }
+.settings-card-icon {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: #eaf2ff;
+  color: #3374e2;
+}
+
+.settings-card h2 { color: #263449; font-size: 16px; letter-spacing: -.3px; }
+.settings-card-heading p { color: #8b98aa; font-size: 12px; margin-top: 5px; line-height: 1.5; }
+.setting-label { color: #9ba9bb; font-size: 10px; font-weight: 800; letter-spacing: 1.3px; margin-top: 29px; margin-bottom: 9px; }
+.setting-value { padding: 12px 14px; border: 1px solid #e5ebf2; border-radius: 8px; background: #f8fafc; color: #36465d; font-size: 12px; overflow-wrap: anywhere; line-height: 1.5; }
+.setting-value.empty { color: #9aa8b9; }
+.settings-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-top: 18px; }
+.settings-actions button { border-radius: 7px; padding: 9px 12px; font-size: 11px; font-weight: 700; min-height: 36px; }
+.settings-primary { display: inline-flex; align-items: center; gap: 7px; border: 0; background: #2563eb; color: #fff; }
+.settings-primary:hover { background: #1857d8; }
+.settings-secondary { border: 1px solid #d9e3ef; background: #fff; color: #466381; }
+.settings-secondary:hover { background: #f3f7fc; }
+.settings-clear { border: 0; background: transparent; color: #8797aa; }
+.settings-clear:hover { color: #bd4c53; background: #fff2f2; }
+.settings-footnote { color: #a1aebe; font-size: 11px; line-height: 1.6; margin-top: 24px; }
+.settings-error { display: flex; align-items: flex-start; gap: 8px; margin-top: 14px; padding: 11px; border-radius: 7px; background: #fff1f1; color: #a43f45; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.settings-error svg { flex-shrink: 0; }
+.settings-loading { margin-top: 12px; font-size: 11px; color: #5575a5; }

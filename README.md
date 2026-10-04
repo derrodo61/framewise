@@ -8,6 +8,7 @@ A local desktop app for browsing folders and inspecting video metadata. Built wi
 - Click a video to see container, video, audio, and embedded tag metadata.
 - Collapse either side panel to give the video browser more room. Panel choices are saved locally.
 - Drag the dividers to resize Workspace and Inspector, or focus a divider and use the arrow keys. Widths are saved locally.
+- Set a startup folder in Settings so it opens automatically the next time the app starts.
 - View or copy the full `ffprobe` JSON output.
 - Files are read locally; the app does not upload them.
 

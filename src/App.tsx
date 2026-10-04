@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import './App.css'
 import './panels.css'
+import './settings.css'
 
 type FileEntry = { name: string; path: string; isDirectory: boolean; size: number | null }
 type DirectoryListing = { path: string; parent: string | null; entries: FileEntry[] }
@@ -20,7 +21,7 @@ type Probe = {
   chapters?: unknown[]
 }
 
-function Icon({ name, size = 20 }: { name: 'folder' | 'film' | 'chevron' | 'arrow' | 'info' | 'refresh' | 'copy' | 'check' | 'close'; size?: number }) {
+function Icon({ name, size = 20 }: { name: 'folder' | 'film' | 'chevron' | 'arrow' | 'info' | 'refresh' | 'copy' | 'check' | 'close' | 'settings'; size?: number }) {
   const paths: Record<typeof name, React.ReactNode> = {
     folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
     film: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 4v16M17 4v16M3 9h4m-4 6h4m10-6h4m-4 6h4" /></>,
@@ -31,6 +32,7 @@ function Icon({ name, size = 20 }: { name: 'folder' | 'film' | 'chevron' | 'arro
     copy: <><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></>,
     check: <path d="m5 12 4 4L19 6" />,
     close: <path d="M6 6l12 12M18 6 6 18" />,
+    settings: <><path d="M4 7h16M4 12h16M4 17h16" /><circle cx="9" cy="7" r="2" fill="white" /><circle cx="16" cy="12" r="2" fill="white" /><circle cx="10" cy="17" r="2" fill="white" /></>,
   }
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>
 }
@@ -94,6 +96,10 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [copyDone, setCopyDone] = useState(false)
+  const [view, setView] = useState<'media' | 'settings'>('media')
+  const [defaultFolder, setDefaultFolder] = useState<string | null>(() => window.localStorage.getItem('framewise.defaultFolder'))
+  const [settingsError, setSettingsError] = useState<string | null>(null)
+  const [startupLoading, setStartupLoading] = useState(() => Boolean(window.localStorage.getItem('framewise.defaultFolder')))
   const [workspaceCollapsed, setWorkspaceCollapsed] = useState(() => savedPanelState('framewise.workspaceCollapsed'))
   const [inspectorCollapsed, setInspectorCollapsed] = useState(() => savedPanelState('framewise.inspectorCollapsed'))
   const [viewportWidth, setViewportWidth] = useState(window.innerWidth)
@@ -102,11 +108,41 @@ function App() {
   const [resizing, setResizing] = useState<PanelSide | null>(null)
   const drag = useRef<{ side: PanelSide; startX: number; startWidth: number; lastWidth: number; limits: { min: number; max: number } } | null>(null)
   const requestId = useRef(0)
+  const rootQueue = useRef<Promise<void>>(Promise.resolve())
+
+  function selectRoot(path: string) {
+    const next = rootQueue.current.then(() => invoke<DirectoryListing>('select_root', { path }))
+    rootQueue.current = next.then(() => {}, () => {})
+    return next
+  }
 
   useEffect(() => {
     const onResize = () => setViewportWidth(window.innerWidth)
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem('framewise.defaultFolder')
+    if (!saved) return
+    let active = true
+    const currentRequest = ++requestId.current
+    selectRoot(saved)
+      .then(next => {
+        if (!active || currentRequest !== requestId.current) return
+        setRoot(next.path); setListing(next); setSelected(null); setProbe(null)
+        if (next.path !== saved) {
+          window.localStorage.setItem('framewise.defaultFolder', next.path)
+          setDefaultFolder(next.path)
+        }
+      })
+      .catch(cause => {
+        if (!active || currentRequest !== requestId.current) return
+        setSettingsError(`Could not open the startup folder: ${errorText(cause)}`)
+        setView('settings')
+      })
+      .finally(() => { if (active && currentRequest === requestId.current) setStartupLoading(false) })
+    return () => { active = false }
   }, [])
 
   const availableForPanels = Math.max(viewportWidth, 760) - MIN_MEDIA_WIDTH
@@ -183,17 +219,45 @@ function App() {
     try {
       const path = await open({ directory: true, multiple: false, title: 'Choose a video folder' })
       if (!path || Array.isArray(path)) return
-      const next = await invoke<DirectoryListing>('select_root', { path })
-      requestId.current++
-      setRoot(next.path); setListing(next); setSelected(null); setProbe(null); setError(null)
+      const currentRequest = ++requestId.current
+      const next = await selectRoot(path)
+      if (currentRequest !== requestId.current) return
+      setRoot(next.path); setListing(next); setSelected(null); setProbe(null); setError(null); setView('media'); setStartupLoading(false)
     } catch (cause) { setError(errorText(cause)) }
+  }
+
+  async function chooseDefaultFolder() {
+    try {
+      const path = await open({ directory: true, multiple: false, title: 'Choose startup folder' })
+      if (!path || Array.isArray(path)) return
+      const currentRequest = ++requestId.current
+      const next = await selectRoot(path)
+      if (currentRequest !== requestId.current) return
+      window.localStorage.setItem('framewise.defaultFolder', next.path)
+      setDefaultFolder(next.path); setSettingsError(null); setStartupLoading(false)
+      setRoot(next.path); setListing(next); setSelected(null); setProbe(null); setError(null)
+    } catch (cause) { setSettingsError(errorText(cause)) }
+  }
+
+  function useCurrentAsDefault() {
+    if (!root) return
+    requestId.current++
+    window.localStorage.setItem('framewise.defaultFolder', root)
+    setDefaultFolder(root); setSettingsError(null); setStartupLoading(false)
+  }
+
+  function clearDefaultFolder() {
+    requestId.current++
+    window.localStorage.removeItem('framewise.defaultFolder')
+    setDefaultFolder(null); setSettingsError(null); setStartupLoading(false)
   }
 
   async function browse(path: string) {
     try {
+      const currentRequest = ++requestId.current
       const next = await invoke<DirectoryListing>('list_directory', { path })
-      requestId.current++
-      setListing(next); setSelected(null); setProbe(null); setError(null); setLoading(false)
+      if (currentRequest !== requestId.current) return
+      setListing(next); setSelected(null); setProbe(null); setError(null); setLoading(false); setView('media')
     } catch (cause) { setError(errorText(cause)) }
   }
 
@@ -238,15 +302,41 @@ function App() {
           {!workspaceCollapsed && <span>WORKSPACE</span>}
           <button className="panel-toggle workspace-toggle" onClick={toggleWorkspace} aria-label={workspaceCollapsed ? 'Expand workspace' : 'Collapse workspace'} aria-expanded={!workspaceCollapsed} title={workspaceCollapsed ? 'Expand workspace' : 'Collapse workspace'}><Icon name="chevron" size={17} /></button>
         </div>
+        {workspaceCollapsed
+          ? <button className={`rail-icon media-rail ${view === 'media' ? 'active' : ''}`} onClick={() => setView('media')} title="Your media" aria-label="Your media"><Icon name="film" size={20} /></button>
+          : <button className={`sidebar-media ${view === 'media' ? 'active' : ''}`} onClick={() => setView('media')}><Icon name="film" size={18} /> Your media</button>}
         {workspaceCollapsed ? root && <button className="rail-icon" onClick={() => browse(root)} title="Go to selected folder" aria-label="Go to selected folder"><Icon name="folder" size={20} /></button> : root ? <>
           <button className="root-item" onClick={() => browse(root)} title={root}><Icon name="folder" size={19} /><span>{root.split(/[\\/]/).filter(Boolean).at(-1) || root}</span></button>
           <div className="sidebar-section-label">CURRENT FOLDER</div>
           <div className="sidebar-current" title={listing?.path}>{listing?.path}</div>
         </> : <div className="sidebar-hint">Choose a folder to see your videos here.</div>}
+        {workspaceCollapsed
+          ? <button className={`rail-icon settings-rail ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')} title="Settings" aria-label="Settings"><Icon name="settings" size={20} /></button>
+          : <button className={`sidebar-settings ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}><Icon name="settings" size={18} /> Settings</button>}
         {!workspaceCollapsed && <div className="sidebar-bottom"><span className="status-dot" /> Files stay on your device</div>}
       </aside>
 
       <main className="main-panel">
+        {view === 'settings' ? <>
+          <div className="content-heading">
+            <div className="eyebrow">PREFERENCES</div>
+            <h1>Settings</h1>
+            <p>Choose how Framewise starts on this computer.</p>
+          </div>
+          <section className="settings-card" aria-labelledby="startup-folder-heading">
+            <div className="settings-card-heading"><div className="settings-card-icon"><Icon name="folder" size={22} /></div><div><h2 id="startup-folder-heading">Startup folder</h2><p>Open this folder automatically when Framewise starts.</p></div></div>
+            <div className="setting-label">SELECTED FOLDER</div>
+            <div className={`setting-value ${defaultFolder ? '' : 'empty'}`} title={defaultFolder ?? undefined}>{defaultFolder ?? 'No startup folder selected'}</div>
+            {settingsError && <div className="settings-error" role="alert"><Icon name="info" size={18} /><span>{settingsError}</span></div>}
+            {startupLoading && <div className="settings-loading">Opening startup folder…</div>}
+            <div className="settings-actions">
+              <button className="settings-primary" onClick={chooseDefaultFolder}><Icon name="folder" size={17} /> {defaultFolder ? 'Change folder' : 'Choose folder'}</button>
+              {root && root !== defaultFolder && <button className="settings-secondary" onClick={useCurrentAsDefault}>Use current folder</button>}
+              {defaultFolder && <button className="settings-clear" onClick={clearDefaultFolder}>Clear</button>}
+            </div>
+            <p className="settings-footnote">The folder path is saved locally. You can still browse other folders at any time.</p>
+          </section>
+        </> : <>
         <div className="content-heading">
           <div className="eyebrow">YOUR MEDIA</div>
           <h1>{listing ? pathParts.at(-1) || 'Videos' : 'Explore your videos'}</h1>
@@ -272,6 +362,7 @@ function App() {
             </button>)}
             {listing.entries.length === 0 && <div className="empty-list">No folders or supported video files here.</div>}
           </div>
+        </>}
         </>}
       </main>
 
