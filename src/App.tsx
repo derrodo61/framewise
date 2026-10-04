@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { CSSProperties, KeyboardEvent, PointerEvent } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import './App.css'
@@ -69,6 +70,17 @@ function bitrate(rate?: string) {
 function errorText(error: unknown) { return error instanceof Error ? error.message : String(error) }
 function display(value: unknown) { return value === undefined || value === null || value === '' ? '—' : String(value) }
 function savedPanelState(key: string) { return window.localStorage.getItem(key) === 'true' }
+function savedPanelWidth(key: string, fallback: number) {
+  const saved = window.localStorage.getItem(key)
+  const width = saved === null ? NaN : Number(saved)
+  return Number.isFinite(width) && width > 0 ? width : fallback
+}
+
+const MIN_MEDIA_WIDTH = 320
+const MIN_WORKSPACE_WIDTH = 140
+const MIN_INSPECTOR_WIDTH = 240
+const COLLAPSED_WIDTH = 56
+type PanelSide = 'left' | 'right'
 
 function Property({ label, value }: { label: string; value: unknown }) {
   return <div className="property"><dt>{label}</dt><dd>{display(value)}</dd></div>
@@ -84,7 +96,74 @@ function App() {
   const [copyDone, setCopyDone] = useState(false)
   const [workspaceCollapsed, setWorkspaceCollapsed] = useState(() => savedPanelState('framewise.workspaceCollapsed'))
   const [inspectorCollapsed, setInspectorCollapsed] = useState(() => savedPanelState('framewise.inspectorCollapsed'))
+  const [viewportWidth, setViewportWidth] = useState(window.innerWidth)
+  const [workspaceWidth, setWorkspaceWidth] = useState(() => savedPanelWidth('framewise.workspaceWidth', window.innerWidth <= 800 ? 150 : window.innerWidth <= 1050 ? 180 : 230))
+  const [inspectorWidth, setInspectorWidth] = useState(() => savedPanelWidth('framewise.inspectorWidth', window.innerWidth <= 800 ? 260 : window.innerWidth <= 1050 ? 300 : 350))
+  const [resizing, setResizing] = useState<PanelSide | null>(null)
+  const drag = useRef<{ side: PanelSide; startX: number; startWidth: number; lastWidth: number; limits: { min: number; max: number } } | null>(null)
   const requestId = useRef(0)
+
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  const availableForPanels = Math.max(viewportWidth, 760) - MIN_MEDIA_WIDTH
+  const effectiveWorkspaceWidth = workspaceCollapsed
+    ? COLLAPSED_WIDTH
+    : Math.max(MIN_WORKSPACE_WIDTH, Math.min(workspaceWidth, availableForPanels - (inspectorCollapsed ? COLLAPSED_WIDTH : MIN_INSPECTOR_WIDTH)))
+  const effectiveInspectorWidth = inspectorCollapsed
+    ? COLLAPSED_WIDTH
+    : Math.max(MIN_INSPECTOR_WIDTH, Math.min(inspectorWidth, availableForPanels - effectiveWorkspaceWidth))
+
+  function widthLimits(side: PanelSide) {
+    return side === 'left'
+      ? { min: MIN_WORKSPACE_WIDTH, max: availableForPanels - effectiveInspectorWidth }
+      : { min: MIN_INSPECTOR_WIDTH, max: availableForPanels - effectiveWorkspaceWidth }
+  }
+
+  function setPanelWidth(side: PanelSide, nextWidth: number, save: boolean, limits = widthLimits(side)) {
+    const { min, max } = limits
+    const width = Math.round(Math.max(min, Math.min(nextWidth, max)))
+    if (side === 'left') setWorkspaceWidth(width)
+    else setInspectorWidth(width)
+    if (save) window.localStorage.setItem(`framewise.${side === 'left' ? 'workspace' : 'inspector'}Width`, String(width))
+    return width
+  }
+
+  function startResize(side: PanelSide, event: PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    const width = side === 'left' ? effectiveWorkspaceWidth : effectiveInspectorWidth
+    drag.current = { side, startX: event.clientX, startWidth: width, lastWidth: width, limits: widthLimits(side) }
+    setResizing(side)
+  }
+
+  function moveResize(event: PointerEvent<HTMLDivElement>) {
+    if (!drag.current) return
+    const { side, startX, startWidth, limits } = drag.current
+    const delta = event.clientX - startX
+    drag.current.lastWidth = setPanelWidth(side, startWidth + (side === 'left' ? delta : -delta), false, limits)
+  }
+
+  function endResize(event: PointerEvent<HTMLDivElement>) {
+    if (!drag.current) return
+    const { side, lastWidth } = drag.current
+    window.localStorage.setItem(`framewise.${side === 'left' ? 'workspace' : 'inspector'}Width`, String(lastWidth))
+    drag.current = null
+    setResizing(null)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+
+  function resizeWithKeyboard(side: PanelSide, event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    const direction = event.key === 'ArrowRight' ? 1 : -1
+    const current = side === 'left' ? effectiveWorkspaceWidth : effectiveInspectorWidth
+    setPanelWidth(side, current + direction * (side === 'left' ? 1 : -1) * (event.shiftKey ? 32 : 10), true)
+  }
 
   function toggleWorkspace() {
     setWorkspaceCollapsed(current => {
@@ -153,7 +232,7 @@ function App() {
       <button className="choose-button" onClick={chooseFolder}><Icon name="folder" size={17} /> Choose folder</button>
     </header>
 
-    <div className={`workspace ${workspaceCollapsed ? 'left-collapsed' : ''} ${inspectorCollapsed ? 'right-collapsed' : ''}`}>
+    <div className={`workspace ${workspaceCollapsed ? 'left-collapsed' : ''} ${inspectorCollapsed ? 'right-collapsed' : ''} ${resizing ? 'resizing' : ''}`} style={{ '--left-width': `${effectiveWorkspaceWidth}px`, '--right-width': `${effectiveInspectorWidth}px` } as CSSProperties}>
       <aside className={`sidebar ${workspaceCollapsed ? 'collapsed' : ''}`} aria-label="Workspace">
         <div className="sidebar-heading">
           {!workspaceCollapsed && <span>WORKSPACE</span>}
@@ -219,6 +298,8 @@ function App() {
           </>}
         </div> : <div className="details-empty"><div className="details-empty-icon"><Icon name="info" size={27} /></div><h3>Nothing selected</h3><p>Choose a video from the browser to see its metadata here.</p>{error && <div className="notice error" role="alert">{error}</div>}</div>)}
       </section>
+      {!workspaceCollapsed && <div className="column-resizer left-resizer" role="separator" tabIndex={0} aria-label="Resize workspace column" aria-orientation="vertical" aria-valuemin={MIN_WORKSPACE_WIDTH} aria-valuemax={widthLimits('left').max} aria-valuenow={effectiveWorkspaceWidth} onPointerDown={event => startResize('left', event)} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize} onKeyDown={event => resizeWithKeyboard('left', event)} />}
+      {!inspectorCollapsed && <div className="column-resizer right-resizer" role="separator" tabIndex={0} aria-label="Resize inspector column" aria-orientation="vertical" aria-valuemin={MIN_INSPECTOR_WIDTH} aria-valuemax={widthLimits('right').max} aria-valuenow={effectiveInspectorWidth} onPointerDown={event => startResize('right', event)} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize} onKeyDown={event => resizeWithKeyboard('right', event)} />}
     </div>
   </div>
 }
