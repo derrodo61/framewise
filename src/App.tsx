@@ -110,6 +110,8 @@ function App() {
   const drag = useRef<{ side: PanelSide; startX: number; startWidth: number; lastWidth: number; limits: { min: number; max: number } } | null>(null)
   const requestId = useRef(0)
   const rootQueue = useRef<Promise<void>>(Promise.resolve())
+  const fileListRef = useRef<HTMLDivElement | null>(null)
+  const pendingFocus = useRef<{ path?: string } | null>(null)
 
   function selectRoot(path: string) {
     const next = rootQueue.current.then(() => invoke<DirectoryListing>('select_root', { path }))
@@ -145,6 +147,16 @@ function App() {
       .finally(() => { if (active && currentRequest === requestId.current) setStartupLoading(false) })
     return () => { active = false }
   }, [])
+
+  useEffect(() => {
+    if (view !== 'media' || !listing || !pendingFocus.current) return
+    const rows = Array.from(fileListRef.current?.querySelectorAll<HTMLButtonElement>('[data-list-row]') ?? [])
+    const target = pendingFocus.current.path
+      ? rows.find(row => row.dataset.path === pendingFocus.current?.path)
+      : rows.find(row => row.dataset.entryIndex === '0') ?? rows[0]
+    pendingFocus.current = null
+    target?.focus()
+  }, [listing, view])
 
   const availableForPanels = Math.max(viewportWidth, 760) - MIN_MEDIA_WIDTH
   const effectiveWorkspaceWidth = workspaceCollapsed
@@ -223,6 +235,7 @@ function App() {
       const currentRequest = ++requestId.current
       const next = await selectRoot(path)
       if (currentRequest !== requestId.current) return
+      pendingFocus.current = {}
       setRoot(next.path); setListing(next); setSelected(null); setProbe(null); setError(null); setView('media'); setStartupLoading(false)
     } catch (cause) { setError(errorText(cause)) }
   }
@@ -253,11 +266,12 @@ function App() {
     setDefaultFolder(null); setSettingsError(null); setStartupLoading(false)
   }
 
-  async function browse(path: string) {
+  async function browse(path: string, focusTarget?: { path?: string }) {
     try {
       const currentRequest = ++requestId.current
       const next = await invoke<DirectoryListing>('list_directory', { path })
       if (currentRequest !== requestId.current) return
+      pendingFocus.current = focusTarget ?? null
       setListing(next); setSelected(null); setProbe(null); setError(null); setLoading(false); setView('media')
     } catch (cause) { setError(errorText(cause)) }
   }
@@ -279,20 +293,25 @@ function App() {
     }
   }
 
-  function navigateVideos(event: KeyboardEvent<HTMLDivElement>) {
+  function navigateFiles(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
-    const focused = event.target instanceof HTMLElement ? event.target.closest<HTMLButtonElement>('[data-video-row]') : null
+    const focused = event.target instanceof HTMLElement ? event.target.closest<HTMLButtonElement>('[data-list-row]') : null
     if (!focused || !event.currentTarget.contains(focused)) return
-    const rows = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[data-video-row]'))
+    const rows = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[data-list-row]'))
     const currentIndex = rows.indexOf(focused)
     if (currentIndex < 0) return
     event.preventDefault()
     const nextIndex = Math.max(0, Math.min(rows.length - 1, currentIndex + (event.key === 'ArrowDown' ? 1 : -1)))
     if (nextIndex === currentIndex) return
-    const next = listing?.entries.filter(entry => !entry.isDirectory)[nextIndex]
-    if (!next) return
     rows[nextIndex].focus()
-    void selectFile(next, 120)
+    const entryIndex = Number(rows[nextIndex].dataset.entryIndex)
+    const next = listing?.entries[entryIndex]
+    if (next && !next.isDirectory) {
+      void selectFile(next, 120)
+    } else {
+      requestId.current++
+      setSelected(null); setProbe(null); setError(null); setLoading(false)
+    }
   }
 
   async function copyMetadata() {
@@ -326,8 +345,8 @@ function App() {
         {workspaceCollapsed
           ? <button className={`rail-icon media-rail ${view === 'media' ? 'active' : ''}`} onClick={() => setView('media')} title="Your media" aria-label="Your media"><Icon name="film" size={20} /></button>
           : <button className={`sidebar-media ${view === 'media' ? 'active' : ''}`} onClick={() => setView('media')}><Icon name="film" size={18} /> Your media</button>}
-        {workspaceCollapsed ? root && <button className="rail-icon" onClick={() => browse(root)} title="Go to selected folder" aria-label="Go to selected folder"><Icon name="folder" size={20} /></button> : root ? <>
-          <button className="root-item" onClick={() => browse(root)} title={root}><Icon name="folder" size={19} /><span>{root.split(/[\\/]/).filter(Boolean).at(-1) || root}</span></button>
+        {workspaceCollapsed ? root && <button className="rail-icon" onClick={() => browse(root, {})} title="Go to selected folder" aria-label="Go to selected folder"><Icon name="folder" size={20} /></button> : root ? <>
+          <button className="root-item" onClick={() => browse(root, {})} title={root}><Icon name="folder" size={19} /><span>{root.split(/[\\/]/).filter(Boolean).at(-1) || root}</span></button>
           <div className="sidebar-section-label">CURRENT FOLDER</div>
           <div className="sidebar-current" title={listing?.path}>{listing?.path}</div>
         </> : <div className="sidebar-hint">Choose a folder to see your videos here.</div>}
@@ -371,18 +390,18 @@ function App() {
           <button className="primary-button" onClick={chooseFolder}>Choose a folder <Icon name="chevron" size={18} /></button>
           <div className="supported">MP4 · MOV · MKV · WebM · AVI and more</div>
         </div> : <>
-          <div className="breadcrumb"><button onClick={() => root && browse(root)}>{root?.split(/[\\/]/).filter(Boolean).at(-1) || 'Root'}</button>{listing.path !== root && <><Icon name="chevron" size={14} /><span>{pathParts.at(-1)}</span></>}</div>
-          <div className="browser-toolbar"><span>{directoryCount} {directoryCount === 1 ? 'folder' : 'folders'} <span className="dot-separator">·</span> {videoCount} {videoCount === 1 ? 'video' : 'videos'}</span><button title="Refresh folder" aria-label="Refresh folder" onClick={() => browse(listing.path)}><Icon name="refresh" size={17} /></button></div>
-          <div className="file-list" role="group" aria-label="Files and folders" onKeyDown={navigateVideos}>
-            {listing.parent && <button className="file-row back-row" onClick={() => browse(listing.parent!)}><span className="file-icon"><Icon name="arrow" size={18} /></span><span className="file-name">Go back</span></button>}
-            {listing.entries.map(entry => <button key={entry.path} data-video-row={entry.isDirectory ? undefined : 'true'} className={`file-row ${selected?.path === entry.path ? 'selected' : ''}`} onClick={() => entry.isDirectory ? browse(entry.path) : selectFile(entry)}>
+          <div className="breadcrumb"><button onClick={() => root && browse(root, {})}>{root?.split(/[\\/]/).filter(Boolean).at(-1) || 'Root'}</button>{listing.path !== root && <><Icon name="chevron" size={14} /><span>{pathParts.at(-1)}</span></>}</div>
+          <div className="browser-toolbar"><span>{directoryCount} {directoryCount === 1 ? 'folder' : 'folders'} <span className="dot-separator">·</span> {videoCount} {videoCount === 1 ? 'video' : 'videos'}</span><button title="Refresh folder" aria-label="Refresh folder" onClick={() => browse(listing.path, selected ? { path: selected.path } : {})}><Icon name="refresh" size={17} /></button></div>
+          <div ref={fileListRef} className="file-list" role="group" aria-label="Files and folders" onKeyDown={navigateFiles}>
+            {listing.parent && <button className="file-row back-row" data-list-row="true" data-entry-index="-1" data-path={listing.parent} onClick={() => browse(listing.parent!, { path: listing.path })}><span className="file-icon"><Icon name="arrow" size={18} /></span><span className="file-name">Go back</span></button>}
+            {listing.entries.map((entry, index) => <button key={entry.path} data-list-row="true" data-entry-index={index} data-path={entry.path} className={`file-row ${selected?.path === entry.path ? 'selected' : ''}`} onClick={() => entry.isDirectory ? browse(entry.path, {}) : selectFile(entry)}>
               <span className={`file-icon ${entry.isDirectory ? 'folder-icon' : 'video-icon'}`}><Icon name={entry.isDirectory ? 'folder' : 'film'} size={19} /></span>
               <span className="file-name" title={entry.name}>{entry.name}</span>
               <span className="file-kind">{entry.isDirectory ? 'Folder' : fileSize(entry.size)}</span>
               <Icon name="chevron" size={16} />
             </button>)}
             {listing.entries.length === 0 && <div className="empty-list">No folders or supported video files here.</div>}
-            {videoCount > 1 && <div className="file-list-tip">Tip: Use ↑ and ↓ to move between videos.</div>}
+            {(listing.parent || listing.entries.length > 0) && <div className="file-list-tip">Tip: Use ↑ and ↓ to select a row. Press Enter to open a folder.</div>}
           </div>
         </>}
         </>}

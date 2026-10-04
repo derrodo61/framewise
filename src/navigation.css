@@ -1,3 +1,11 @@
+.file-row:focus {
+  position: relative;
+  z-index: 1;
+  background: #edf4ff;
+  outline: 2px solid #77a4f4;
+  outline-offset: -2px;
+}
+
 .file-list-tip {
   padding: 12px 18px;
   border-top: 1px solid #edf1f5;
