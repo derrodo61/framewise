@@ -11,8 +11,8 @@
 .editor-save:hover { background: #1857d8; }
 .editor-header button:disabled,.editor-controls button:disabled { opacity: .5; cursor: not-allowed; }
 .editor-main { min-height: 0; overflow-y: auto; padding: 24px 32px 48px; }
-.editor-video-wrap { width: min(100%, 960px); aspect-ratio: 16/9; max-height: 52vh; margin: 0 auto; border-radius: 12px; overflow: hidden; background: #111827; display: grid; place-items: center; }
-.editor-video-wrap video { display: block; width: 100%; height: 100%; object-fit: contain; }
+.editor-video-wrap { position: relative; width: min(100%, 960px); aspect-ratio: 16/9; max-height: 52vh; margin: 0 auto; border-radius: 12px; overflow: hidden; background: #111827; display: grid; place-items: center; }
+.editor-video-wrap video { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; }
 .editor-video-placeholder { color: #c5d1e0; font-size: 13px; }
 .editor-controls { width: min(100%, 960px); margin: 22px auto 0; padding: 23px 26px; border: 1px solid #e7edf4; border-radius: 12px; background: #fff; }
 .editor-time-line { display: flex; align-items: baseline; gap: 8px; color: #8090a2; font-size: 12px; }
