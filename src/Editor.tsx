@@ -34,7 +34,6 @@ export default function Editor({ file, onExit }: { file: EditorFile; onExit: (re
   const [cutEnd, setCutEnd] = useState<number | null>(null)
   const [cutApplied, setCutApplied] = useState(false)
   const [playing, setPlaying] = useState(false)
-  const [repeat, setRepeat] = useState(false)
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState(0)
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -74,7 +73,6 @@ export default function Editor({ file, onExit }: { file: EditorFile; onExit: (re
       if (cutEnd >= duration - 0.01 && time >= cutStart) {
         video.pause()
         seek(0)
-        if (repeat) void video.play().catch(() => {})
         return
       }
       if (time >= cutStart && time < cutEnd) {
@@ -85,20 +83,21 @@ export default function Editor({ file, onExit }: { file: EditorFile; onExit: (re
     setPlayhead(time)
   }
 
+  function startPlayback() {
+    if (videoRef.current) void videoRef.current.play().catch(cause => setError(reportError('Playing video', cause)))
+  }
+
   function togglePlayback() {
     const video = videoRef.current
     if (!video) return
     if (!video.paused) { video.pause(); return }
     if (video.ended || video.currentTime >= duration - 0.01) seek(0)
-    void video.play().catch(cause => setError(reportError('Playing video', cause)))
+    startPlayback()
   }
 
-  function playbackEnded() {
-    setPlaying(false)
-    if (repeat && videoRef.current) {
-      seek(0)
-      void videoRef.current.play().catch(() => {})
-    }
+  function playAgain() {
+    seek(0)
+    startPlayback()
   }
 
   function applyCut() {
@@ -172,7 +171,7 @@ export default function Editor({ file, onExit }: { file: EditorFile; onExit: (re
 
     <main className="editor-main">
       <div className="editor-video-wrap">
-        {source && videoMounted ? <video ref={videoRef} src={convertFileSrc(source.videoPath)} controls playsInline preload="metadata" onTimeUpdate={previewTime} onSeeked={previewTime} onPlay={() => { setPlaying(true); previewTime() }} onPause={() => setPlaying(false)} onEnded={playbackEnded} aria-label={`Preview ${file.name}`} /> : <div className="editor-video-placeholder">{busy ? 'Rendering your edited video…' : source ? 'Preview paused' : error ? 'Editor unavailable for this video' : 'Opening video…'}</div>}
+        {source && videoMounted ? <video ref={videoRef} src={convertFileSrc(source.videoPath)} controls playsInline preload="metadata" onTimeUpdate={previewTime} onSeeked={previewTime} onPlay={() => { setPlaying(true); previewTime() }} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} aria-label={`Preview ${file.name}`} /> : <div className="editor-video-placeholder">{busy ? 'Rendering your edited video…' : source ? 'Preview paused' : error ? 'Editor unavailable for this video' : 'Opening video…'}</div>}
       </div>
       {error && <div className="editor-error" role="alert">{error}</div>}
       {busy && <div className="editor-progress" role="status"><span>Rendering MP4… {Math.round(progress)}%</span><progress max="100" value={progress} /></div>}
@@ -183,7 +182,7 @@ export default function Editor({ file, onExit }: { file: EditorFile; onExit: (re
           <input type="range" min="0" max={duration} step="0.01" value={Math.min(playhead, duration)} onChange={event => seek(Number(event.target.value))} aria-label="Scrub through video" disabled={busy} />
         </div>
         <div className="editor-playback-controls" role="group" aria-label="Playback controls">
-          <button type="button" className={repeat ? 'active' : ''} aria-pressed={repeat} onClick={() => setRepeat(value => !value)} disabled={busy}>Repeat</button>
+          <button type="button" onClick={playAgain} disabled={busy}>Play again</button>
           <button type="button" onClick={() => seek(0)} disabled={busy}>Move to start</button>
           <button type="button" className="editor-play" onClick={togglePlayback} disabled={busy}>{playing ? 'Pause' : 'Play'}</button>
         </div>
