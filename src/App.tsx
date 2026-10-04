@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import type { CSSProperties, KeyboardEvent, PointerEvent } from 'react'
+import { flushSync } from 'react-dom'
+import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent } from 'react'
 import { convertFileSrc, invoke, isTauri } from '@tauri-apps/api/core'
-import { open } from '@tauri-apps/plugin-dialog'
+import { ask, open } from '@tauri-apps/plugin-dialog'
 import { error as logError } from '@tauri-apps/plugin-log'
 import './App.css'
 import './panels.css'
@@ -9,6 +10,7 @@ import './settings.css'
 import './navigation.css'
 import './theme.css'
 import './preview.css'
+import './file-actions.css'
 
 type FileEntry = { name: string; path: string; isDirectory: boolean; size: number | null }
 type DirectoryListing = { path: string; parent: string | null; entries: FileEntry[] }
@@ -125,6 +127,11 @@ function VideoPreview({ file }: { file: FileEntry }) {
     return () => { active = false; window.clearTimeout(timer) }
   }, [file.path])
 
+  useEffect(() => {
+    const video = videoRef.current
+    return () => { video?.pause(); video?.removeAttribute('src') }
+  }, [preview])
+
   const videoUrl = preview ? convertFileSrc(preview.videoPath) : null
   const thumbnailUrl = preview?.thumbnailPath ? convertFileSrc(preview.thumbnailPath) : null
 
@@ -156,6 +163,9 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [copyDone, setCopyDone] = useState(false)
+  const [contextMenu, setContextMenu] = useState<{ file: FileEntry; x: number; y: number } | null>(null)
+  const [fileAction, setFileAction] = useState<{ message: string; error: boolean } | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const [view, setView] = useState<'media' | 'settings'>('media')
   const [theme, setTheme] = useState<'light' | 'dark'>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
   const [defaultFolder, setDefaultFolder] = useState<string | null>(() => window.localStorage.getItem('framewise.defaultFolder'))
@@ -171,6 +181,7 @@ function App() {
   const requestId = useRef(0)
   const rootQueue = useRef<Promise<void>>(Promise.resolve())
   const fileListRef = useRef<HTMLDivElement | null>(null)
+  const contextMenuRef = useRef<HTMLDivElement | null>(null)
   const pendingFocus = useRef<{ path?: string } | null>(null)
 
   function selectRoot(path: string) {
@@ -217,6 +228,32 @@ function App() {
     pendingFocus.current = null
     target?.focus()
   }, [listing, view])
+
+  useEffect(() => {
+    if (!contextMenu) return
+    contextMenuRef.current?.querySelector('button')?.focus()
+    const closeOnPointer = (event: globalThis.PointerEvent) => {
+      if (!contextMenuRef.current?.contains(event.target as Node)) setContextMenu(null)
+    }
+    const closeOnKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setContextMenu(null)
+        Array.from(fileListRef.current?.querySelectorAll<HTMLButtonElement>('[data-list-row]') ?? [])
+          .find(row => row.dataset.path === contextMenu.file.path)?.focus()
+      }
+    }
+    const close = () => setContextMenu(null)
+    document.addEventListener('pointerdown', closeOnPointer)
+    document.addEventListener('keydown', closeOnKey)
+    window.addEventListener('resize', close)
+    window.addEventListener('scroll', close, true)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnPointer)
+      document.removeEventListener('keydown', closeOnKey)
+      window.removeEventListener('resize', close)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [contextMenu])
 
   const availableForPanels = Math.max(viewportWidth, 760) - MIN_MEDIA_WIDTH
   const effectiveWorkspaceWidth = workspaceCollapsed
@@ -335,6 +372,7 @@ function App() {
 
   async function browse(path: string, focusTarget?: { path?: string }) {
     try {
+      setContextMenu(null); setFileAction(null)
       const currentRequest = ++requestId.current
       const next = await invoke<DirectoryListing>('list_directory', { path })
       if (currentRequest !== requestId.current) return
@@ -368,10 +406,53 @@ function App() {
     }
   }
 
+  function openFileMenu(file: FileEntry, x: number, y: number) {
+    if (file.isDirectory || deleting) return
+    if (selected?.path !== file.path) void selectFile(file)
+    setContextMenu({ file, x: Math.max(8, Math.min(x, window.innerWidth - 200)), y: Math.max(8, Math.min(y, window.innerHeight - 60)) })
+  }
+
+  function fileContextMenu(event: MouseEvent<HTMLButtonElement>, file: FileEntry) {
+    if (file.isDirectory) return
+    event.preventDefault()
+    openFileMenu(file, event.clientX, event.clientY)
+  }
+
+  async function moveFileToTrash(file: FileEntry) {
+    setContextMenu(null)
+    try {
+      const approved = await ask(`Move “${file.name}” to Trash? You can restore it from your system's Trash or Recycle Bin.`, { title: 'Move video to Trash', kind: 'warning', okLabel: 'Move to Trash', cancelLabel: 'Cancel' })
+      if (!approved) return
+      setDeleting(true)
+      setFileAction(null)
+      const currentRequest = ++requestId.current
+      flushSync(() => { setSelected(null); setProbe(null); setError(null); setLoading(false) })
+      const next = await invoke<DirectoryListing>('move_video_to_trash', { path: file.path })
+      if (currentRequest !== requestId.current) return
+      const oldIndex = listing?.entries.findIndex(entry => entry.path === file.path) ?? 0
+      const nearby = next.entries[Math.min(Math.max(oldIndex, 0), next.entries.length - 1)]
+      pendingFocus.current = nearby ? { path: nearby.path } : null
+      setListing(next)
+      setFileAction({ message: `Moved “${file.name}” to Trash.`, error: false })
+      if (nearby && !nearby.isDirectory) void selectFile(nearby)
+    } catch (cause) {
+      setFileAction({ message: reportError('Moving video to Trash', cause), error: true })
+    } finally { setDeleting(false) }
+  }
+
   function navigateFiles(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
     const focused = event.target instanceof HTMLElement ? event.target.closest<HTMLButtonElement>('[data-list-row]') : null
     if (!focused || !event.currentTarget.contains(focused)) return
+    if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+      event.preventDefault()
+      const entry = listing?.entries[Number(focused.dataset.entryIndex)]
+      if (entry && !entry.isDirectory) {
+        const bounds = focused.getBoundingClientRect()
+        openFileMenu(entry, bounds.left + 24, bounds.bottom - 6)
+      }
+      return
+    }
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
     const rows = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[data-list-row]'))
     const currentIndex = rows.indexOf(focused)
     if (currentIndex < 0) return
@@ -480,16 +561,17 @@ function App() {
         </div> : <>
           <div className="breadcrumb"><button onClick={() => root && browse(root, {})}>{root?.split(/[\\/]/).filter(Boolean).at(-1) || 'Root'}</button>{listing.path !== root && <><Icon name="chevron" size={14} /><span>{pathParts.at(-1)}</span></>}</div>
           <div className="browser-toolbar"><span>{directoryCount} {directoryCount === 1 ? 'folder' : 'folders'} <span className="dot-separator">·</span> {videoCount} {videoCount === 1 ? 'video' : 'videos'}</span><button title="Refresh folder" aria-label="Refresh folder" onClick={() => browse(listing.path, selected ? { path: selected.path } : {})}><Icon name="refresh" size={17} /></button></div>
+          {fileAction && <div className={`file-action ${fileAction.error ? 'error' : ''}`} role={fileAction.error ? 'alert' : 'status'}>{fileAction.message}</div>}
           <div ref={fileListRef} className="file-list" role="group" aria-label="Files and folders" onKeyDown={navigateFiles}>
             {listing.parent && <button className="file-row back-row" data-list-row="true" data-entry-index="-1" data-path={listing.parent} onClick={() => browse(listing.parent!, { path: listing.path })}><span className="file-icon"><Icon name="arrow" size={18} /></span><span className="file-name">Go back</span></button>}
-            {listing.entries.map((entry, index) => <button key={entry.path} data-list-row="true" data-entry-index={index} data-path={entry.path} className={`file-row ${selected?.path === entry.path ? 'selected' : ''}`} onClick={() => entry.isDirectory ? browse(entry.path, {}) : selectFile(entry)}>
+            {listing.entries.map((entry, index) => <button key={entry.path} data-list-row="true" data-entry-index={index} data-path={entry.path} className={`file-row ${selected?.path === entry.path ? 'selected' : ''}`} onClick={() => entry.isDirectory ? browse(entry.path, {}) : selectFile(entry)} onContextMenu={event => fileContextMenu(event, entry)}>
               <span className={`file-icon ${entry.isDirectory ? 'folder-icon' : 'video-icon'}`}><Icon name={entry.isDirectory ? 'folder' : 'film'} size={19} /></span>
               <span className="file-name" title={entry.name}>{entry.name}</span>
               <span className="file-kind">{entry.isDirectory ? 'Folder' : fileSize(entry.size)}</span>
               <Icon name="chevron" size={16} />
             </button>)}
             {listing.entries.length === 0 && <div className="empty-list">No folders or supported video files here.</div>}
-            {(listing.parent || listing.entries.length > 0) && <div className="file-list-tip">Tip: Use ↑ and ↓ to select a row. Press Enter to open a folder.</div>}
+            {(listing.parent || listing.entries.length > 0) && <div className="file-list-tip">Tip: Use ↑ and ↓ to select a row. Press Enter to open a folder. Right-click a video for more actions.</div>}
           </div>
         </>}
         </>}
@@ -522,6 +604,9 @@ function App() {
       {!workspaceCollapsed && <div className="column-resizer left-resizer" role="separator" tabIndex={0} aria-label="Resize workspace column" aria-orientation="vertical" aria-valuemin={MIN_WORKSPACE_WIDTH} aria-valuemax={widthLimits('left').max} aria-valuenow={effectiveWorkspaceWidth} onPointerDown={event => startResize('left', event)} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize} onKeyDown={event => resizeWithKeyboard('left', event)} />}
       {!inspectorCollapsed && <div className="column-resizer right-resizer" role="separator" tabIndex={0} aria-label="Resize inspector column" aria-orientation="vertical" aria-valuemin={MIN_INSPECTOR_WIDTH} aria-valuemax={widthLimits('right').max} aria-valuenow={effectiveInspectorWidth} onPointerDown={event => startResize('right', event)} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize} onKeyDown={event => resizeWithKeyboard('right', event)} />}
     </div>
+    {contextMenu && <div ref={contextMenuRef} className="file-context-menu" role="menu" aria-label={`Actions for ${contextMenu.file.name}`} style={{ left: contextMenu.x, top: contextMenu.y }}>
+      <button role="menuitem" onClick={() => void moveFileToTrash(contextMenu.file)}>Move to Trash</button>
+    </div>}
   </div>
 }
 

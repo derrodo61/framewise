@@ -101,6 +101,27 @@ fn list_directory(path: String, state: tauri::State<'_, AppState>) -> Result<Dir
 }
 
 #[tauri::command]
+fn move_video_to_trash(path: String, state: tauri::State<'_, AppState>) -> Result<DirectoryListing, String> {
+    let file_type = fs::symlink_metadata(&path)
+        .map_err(|error| format!("Cannot open video: {error}"))?
+        .file_type();
+    if !file_type.is_file() {
+        return Err("Select a regular video file".into());
+    }
+    let root = selected_root(&state)?;
+    let resolved = within_root(&path, &state)?;
+    if !video_file(&resolved) {
+        return Err("Select a supported video file".into());
+    }
+    let parent = resolved.parent().ok_or("Cannot find the video's folder")?;
+    trash::delete(&resolved).map_err(|error| {
+        log::error!("Could not move video to Trash: {error}");
+        format!("Could not move video to Trash: {error}")
+    })?;
+    list_folder(parent, &root)
+}
+
+#[tauri::command]
 fn inspect_video(path: String, state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
     let resolved = within_root(&path, &state)?;
     if !resolved.is_file() || !video_file(&resolved) {
@@ -262,7 +283,7 @@ pub fn run() {
             Ok(())
         })
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![select_root, list_directory, inspect_video, prepare_preview])
+        .invoke_handler(tauri::generate_handler![select_root, list_directory, move_video_to_trash, inspect_video, prepare_preview])
         .run(tauri::generate_context!())
         .expect("error while building Tauri application");
 }
