@@ -88,3 +88,10 @@
 
 .details-actions { display: flex; align-items: center; gap: 5px; }
 .details-panel.collapsed .details-top { justify-content: center; padding: 28px 0; }
+
+#root { height: 100vh; }
+.app-shell { height: 100%; min-height: 0; }
+.workspace { overflow: hidden; }
+.main-panel { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.details-panel { min-height: 0; overflow: hidden; }
+.details-body { flex: 1; min-height: 0; overscroll-behavior: contain; }
