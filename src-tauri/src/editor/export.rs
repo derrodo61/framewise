@@ -3,7 +3,7 @@ use std::{
     fs,
     io::{self, BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
     time::UNIX_EPOCH,
 };
 use tauri::Emitter;
@@ -162,7 +162,7 @@ fn run_render(
     let expected = info.duration - (end - start);
     let mut last_error = None;
     for program in ffmpeg_candidates() {
-        let mut command = Command::new(program);
+        let mut command = crate::media_command(program);
         command
             .args(["-hide_banner", "-nostdin", "-loglevel", "error", "-i"])
             .arg(source)

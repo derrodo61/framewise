@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom'
 import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent } from 'react'
 import { convertFileSrc, invoke, isTauri } from '@tauri-apps/api/core'
 import { ask, open } from '@tauri-apps/plugin-dialog'
-import { error as logError } from '@tauri-apps/plugin-log'
+import { error as logError, info as logInfo } from '@tauri-apps/plugin-log'
 import { listen } from '@tauri-apps/api/event'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import Editor from './Editor'
@@ -119,6 +119,7 @@ function Property({ label, value }: { label: string; value: unknown }) {
 
 function VideoPreview({ file }: { file: FileEntry }) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const lookupStartedAt = useRef(0)
   const [preview, setPreview] = useState<Preview | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [thumbnailPending, setThumbnailPending] = useState(false)
@@ -128,9 +129,12 @@ function VideoPreview({ file }: { file: FileEntry }) {
   useEffect(() => {
     let active = true
     let timer: number | undefined
+    lookupStartedAt.current = performance.now()
     invoke<Preview>('prepare_preview', { path: file.path })
       .then(result => {
         if (!active) return
+        const elapsed = Math.round(performance.now() - lookupStartedAt.current)
+        if (elapsed > 250) void logInfo(`Preview request took ${elapsed} ms (cached: ${Boolean(result.thumbnailPath)}): ${file.name}`)
         setPreview(result)
         if (result.thumbnailPath) return
         setThumbnailPending(true)
@@ -145,7 +149,7 @@ function VideoPreview({ file }: { file: FileEntry }) {
       })
       .catch(cause => { if (active) setPreviewError(reportError('Preparing video preview', cause)) })
     return () => { active = false; window.clearTimeout(timer) }
-  }, [file.path])
+  }, [file.path, file.name])
 
   const videoUrl = preview ? versionedMediaSrc(preview.videoPath, preview.videoVersion) : null
   const thumbnailUrl = preview?.thumbnailPath ? convertFileSrc(preview.thumbnailPath) : null
@@ -166,7 +170,10 @@ function VideoPreview({ file }: { file: FileEntry }) {
     <div className="section-title preview-title">PREVIEW</div>
     <div className={`preview-frame ${playing ? 'is-playing' : ''}`}>
       {videoUrl && <video ref={videoRef} src={videoUrl} poster={thumbnailUrl ?? undefined} preload="none" controls={playing} playsInline onError={() => { setPlaying(false); setPlaybackError(true) }} aria-label={`Playing ${file.name}`} />}
-      {!playing && (thumbnailUrl ? <img src={thumbnailUrl} alt={`Preview frame from ${file.name}`} /> : <div className="preview-placeholder"><Icon name="film" size={36} /></div>)}
+      {!playing && (thumbnailUrl ? <img src={thumbnailUrl} alt={`Preview frame from ${file.name}`} onLoad={() => {
+        const elapsed = Math.round(performance.now() - lookupStartedAt.current)
+        if (elapsed > 250) void logInfo(`Preview image displayed after ${elapsed} ms: ${file.name}`)
+      }} /> : <div className="preview-placeholder"><Icon name="film" size={36} /></div>)}
       {preview && !playing && <button className="preview-play" onClick={startPlayback} aria-label={`Play ${file.name}`}><Icon name="play" size={24} /></button>}
       {(!preview || (thumbnailPending && !playing)) && !previewError && <span className="preview-loading">Preparing preview…</span>}
     </div>

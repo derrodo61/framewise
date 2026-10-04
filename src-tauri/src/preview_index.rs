@@ -1,4 +1,4 @@
-use std::{fs, path::{Path, PathBuf}, time::Duration};
+use std::{fs, path::{Path, PathBuf}, sync::{Mutex, OnceLock}, time::Duration};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -42,12 +42,18 @@ fn open_at(path: &Path) -> Result<Connection, String> {
     Ok(connection)
 }
 
-fn open() -> Result<Connection, String> {
-    open_at(&database_path()?)
+fn with_connection<T>(operation: impl FnOnce(&mut Connection) -> Result<T, String>) -> Result<T, String> {
+    static DATABASE: OnceLock<Mutex<Option<Connection>>> = OnceLock::new();
+    let mut guard = DATABASE.get_or_init(|| Mutex::new(None)).lock()
+        .map_err(|_| "Preview index is unavailable".to_string())?;
+    if guard.is_none() {
+        *guard = Some(open_at(&database_path()?)?);
+    }
+    operation(guard.as_mut().ok_or("Preview index is unavailable")?)
 }
 
 pub(crate) fn initialize() -> Result<(), String> {
-    open().map(|_| ())
+    with_connection(|_| Ok(()))
 }
 
 fn find_on(connection: &Connection, video: &Path) -> rusqlite::Result<Option<Entry>> {
@@ -59,12 +65,12 @@ fn find_on(connection: &Connection, video: &Path) -> rusqlite::Result<Option<Ent
 }
 
 pub(crate) fn find(video: &Path) -> Result<Option<Entry>, String> {
-    find_on(&open()?, video).map_err(|error| format!("Cannot read preview index: {error}"))
+    with_connection(|connection| find_on(connection, video)
+        .map_err(|error| format!("Cannot read preview index: {error}")))
 }
 
 pub(crate) fn record(video: &Path, version: &str, image_name: &str) -> Result<Option<String>, String> {
-    let mut connection = open()?;
-    record_on(&mut connection, video, version, image_name)
+    with_connection(|connection| record_on(connection, video, version, image_name))
 }
 
 fn record_on(connection: &mut Connection, video: &Path, version: &str, image_name: &str) -> Result<Option<String>, String> {
@@ -82,8 +88,7 @@ fn record_on(connection: &mut Connection, video: &Path, version: &str, image_nam
 }
 
 pub(crate) fn forget(video: &Path) -> Result<Option<String>, String> {
-    let mut connection = open()?;
-    forget_on(&mut connection, video)
+    with_connection(|connection| forget_on(connection, video))
 }
 
 fn forget_on(connection: &mut Connection, video: &Path) -> Result<Option<String>, String> {
@@ -98,8 +103,7 @@ fn forget_on(connection: &mut Connection, video: &Path) -> Result<Option<String>
 }
 
 pub(crate) fn relocate(old: &Path, new: &Path) -> Result<Option<String>, String> {
-    let mut connection = open()?;
-    relocate_on(&mut connection, old, new)
+    with_connection(|connection| relocate_on(connection, old, new))
 }
 
 fn relocate_on(connection: &mut Connection, old: &Path, new: &Path) -> Result<Option<String>, String> {
@@ -126,8 +130,7 @@ fn entries_under(connection: &Connection, folder: &Path) -> Result<Vec<(PathBuf,
 }
 
 pub(crate) fn forget_folder(folder: &Path) -> Result<Vec<String>, String> {
-    let mut connection = open()?;
-    forget_folder_on(&mut connection, folder)
+    with_connection(|connection| forget_folder_on(connection, folder))
 }
 
 fn forget_folder_on(connection: &mut Connection, folder: &Path) -> Result<Vec<String>, String> {
@@ -143,8 +146,7 @@ fn forget_folder_on(connection: &mut Connection, folder: &Path) -> Result<Vec<St
 }
 
 pub(crate) fn relocate_folder(old: &Path, new: &Path) -> Result<Vec<String>, String> {
-    let mut connection = open()?;
-    relocate_folder_on(&mut connection, old, new)
+    with_connection(|connection| relocate_folder_on(connection, old, new))
 }
 
 fn relocate_folder_on(connection: &mut Connection, old: &Path, new: &Path) -> Result<Vec<String>, String> {

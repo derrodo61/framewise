@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::{collections::{hash_map::DefaultHasher, HashSet}, fs, hash::{Hash, Hasher}, io, path::{Path, PathBuf}, process::{Command, Output}, sync::Mutex, time::UNIX_EPOCH};
+use std::{collections::{hash_map::DefaultHasher, HashSet}, fs, hash::{Hash, Hasher}, io, path::{Path, PathBuf}, process::{Command, Output}, sync::Mutex, time::{Instant, UNIX_EPOCH}};
 use tauri::Manager;
 mod editor;
 mod duplicate;
@@ -187,12 +187,18 @@ fn move_folder_to_trash(path: String, state: tauri::State<'_, AppState>) -> Resu
 }
 
 #[tauri::command]
-fn inspect_video(path: String, state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
+async fn inspect_video(path: String, state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
     let resolved = within_root(&path, &state)?;
     if !resolved.is_file() || !video_file(&resolved) {
         return Err("Select a supported video file".into());
     }
-    let output = run_ffprobe(&resolved)
+    tauri::async_runtime::spawn_blocking(move || inspect_video_file(&resolved))
+        .await.map_err(|error| format!("Metadata task failed: {error}"))?
+}
+
+fn inspect_video_file(resolved: &Path) -> Result<serde_json::Value, String> {
+    let started = Instant::now();
+    let output = run_ffprobe(resolved)
         .map_err(|error| {
             log::error!("ffprobe could not start: {error}");
             if error.kind() == io::ErrorKind::NotFound {
@@ -204,14 +210,30 @@ fn inspect_video(path: String, state: tauri::State<'_, AppState>) -> Result<serd
         log::error!("ffprobe failed: {}", details.trim());
         return Err(format!("Could not inspect video: {}", details.trim()));
     }
-    serde_json::from_slice(&output.stdout).map_err(|error| {
+    let result = serde_json::from_slice(&output.stdout).map_err(|error| {
         log::error!("ffprobe returned invalid JSON: {error}");
         format!("Invalid ffprobe output: {error}")
-    })
+    });
+    if started.elapsed().as_millis() > 250 {
+        log::info!("Slow metadata read: {} ms, video={}", started.elapsed().as_millis(), resolved.display());
+    }
+    result
+}
+
+pub(crate) fn media_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let command = Command::new(program);
+    #[cfg(windows)]
+    let command = {
+        use std::os::windows::process::CommandExt;
+        let mut command = command;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW for the installed GUI app.
+        command
+    };
+    command
 }
 
 fn execute_ffprobe(probe: &Path, video: &Path, args: &[&str]) -> io::Result<Output> {
-    Command::new(probe)
+    media_command(probe)
         .args(["-v", "error"])
         .args(args)
         .arg(video)
@@ -258,7 +280,7 @@ fn winget_ffprobe() -> Option<PathBuf> {
 }
 
 fn execute_ffmpeg(program: &Path, video: &Path, thumbnail: &Path, seek: &str) -> io::Result<Output> {
-    Command::new(program)
+    media_command(program)
         .args(["-hide_banner", "-loglevel", "error", "-ss", seek, "-i"])
         .arg(video)
         .args(["-frames:v", "1", "-vf", "scale=480:-2", "-y"])
@@ -590,18 +612,24 @@ fn create_thumbnail(video: &Path, app: &tauri::AppHandle) -> Option<PathBuf> {
 
 #[tauri::command]
 fn prepare_preview(path: String, state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<Preview, String> {
+    let started = Instant::now();
     let video = within_root(&path, &state)?;
     if !video.is_file() || !video_file(&video) {
         return Err("Select a supported video file".into());
     }
     let video_version = editor::signature(&video)?;
     app.asset_protocol_scope().allow_file(&video).map_err(|error| format!("Cannot open video preview: {error}"))?;
+    let lookup_started = Instant::now();
     let thumbnail_path = existing_thumbnail(&video, &app).and_then(|thumbnail| {
         if let Err(error) = app.asset_protocol_scope().allow_file(&thumbnail) {
             log::warn!("Could not expose video thumbnail: {error}");
             None
         } else { Some(thumbnail.to_string_lossy().into_owned()) }
     });
+    let elapsed = started.elapsed();
+    if elapsed.as_millis() > 250 {
+        log::info!("Slow preview lookup: total={} ms, cache={} ms, cached={}, video={}", elapsed.as_millis(), lookup_started.elapsed().as_millis(), thumbnail_path.is_some(), video.display());
+    }
     Ok(Preview { video_path: video.to_string_lossy().into_owned(), video_version, thumbnail_path })
 }
 
