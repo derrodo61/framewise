@@ -17,6 +17,7 @@ import './file-actions.css'
 
 type FileEntry = { name: string; path: string; isDirectory: boolean; size: number | null }
 type DirectoryListing = { path: string; parent: string | null; entries: FileEntry[] }
+type DuplicateResult = { listing: DirectoryListing; duplicatedPath: string }
 type ProbeStream = {
   index?: number; codec_type?: string; codec_name?: string; profile?: string
   width?: number; height?: number; r_frame_rate?: string; avg_frame_rate?: string
@@ -163,6 +164,7 @@ function App() {
   const [contextMenu, setContextMenu] = useState<{ file: FileEntry; x: number; y: number } | null>(null)
   const [fileAction, setFileAction] = useState<{ message: string; error: boolean } | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [duplicatingFile, setDuplicatingFile] = useState<string | null>(null)
   const [view, setView] = useState<'media' | 'settings'>('media')
   const [theme, setTheme] = useState<'light' | 'dark'>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
   const [defaultFolder, setDefaultFolder] = useState<string | null>(() => window.localStorage.getItem('framewise.defaultFolder'))
@@ -404,9 +406,9 @@ function App() {
   }
 
   function openFileMenu(file: FileEntry, x: number, y: number) {
-    if (file.isDirectory || deleting) return
+    if (file.isDirectory || deleting || duplicatingFile) return
     if (selected?.path !== file.path) void selectFile(file)
-    setContextMenu({ file, x: Math.max(8, Math.min(x, window.innerWidth - 200)), y: Math.max(8, Math.min(y, window.innerHeight - 96)) })
+    setContextMenu({ file, x: Math.max(8, Math.min(x, window.innerWidth - 200)), y: Math.max(8, Math.min(y, window.innerHeight - 132)) })
   }
 
   function editFile(file: FileEntry) {
@@ -418,6 +420,25 @@ function App() {
     if (file.isDirectory) return
     event.preventDefault()
     openFileMenu(file, event.clientX, event.clientY)
+  }
+
+  async function duplicateFile(file: FileEntry) {
+    setContextMenu(null)
+    setFileAction(null)
+    setDuplicatingFile(file.name)
+    const currentRequest = ++requestId.current
+    try {
+      const result = await invoke<DuplicateResult>('duplicate_video', { path: file.path })
+      const duplicate = result.listing.entries.find(entry => entry.path === result.duplicatedPath)
+      if (currentRequest === requestId.current) {
+        pendingFocus.current = { path: result.duplicatedPath }
+        setListing(result.listing)
+        if (duplicate) void selectFile(duplicate)
+      }
+      setFileAction({ message: `Created “${duplicate?.name ?? displayPath(result.duplicatedPath)}”.`, error: false })
+    } catch (cause) {
+      setFileAction({ message: reportError('Duplicating video', cause), error: true })
+    } finally { setDuplicatingFile(null) }
   }
 
   async function moveFileToTrash(file: FileEntry) {
@@ -585,6 +606,7 @@ function App() {
         </div> : <>
           <div className="breadcrumb"><button onClick={() => root && browse(root, {})}>{root?.split(/[\\/]/).filter(Boolean).at(-1) || 'Root'}</button>{listing.path !== root && <><Icon name="chevron" size={14} /><span>{pathParts.at(-1)}</span></>}</div>
           <div className="browser-toolbar"><span>{directoryCount} {directoryCount === 1 ? 'folder' : 'folders'} <span className="dot-separator">·</span> {videoCount} {videoCount === 1 ? 'video' : 'videos'}</span><button title="Refresh folder" aria-label="Refresh folder" onClick={() => browse(listing.path, selected ? { path: selected.path } : {})}><Icon name="refresh" size={17} /></button></div>
+          {duplicatingFile && <div className="file-action progress" role="status">Duplicating “{duplicatingFile}”…</div>}
           {fileAction && <div className={`file-action ${fileAction.error ? 'error' : ''}`} role={fileAction.error ? 'alert' : 'status'}>{fileAction.message}</div>}
           <div ref={fileListRef} className="file-list" role="group" aria-label="Files and folders" onKeyDown={navigateFiles}>
             {listing.parent && <button className="file-row back-row" data-list-row="true" data-entry-index="-1" data-path={listing.parent} onClick={() => browse(listing.parent!, { path: listing.path })}><span className="file-icon"><Icon name="arrow" size={18} /></span><span className="file-name">Go back</span></button>}
@@ -631,6 +653,7 @@ function App() {
     </div>
     {contextMenu && <div ref={contextMenuRef} className="file-context-menu" role="menu" aria-label={`Actions for ${contextMenu.file.name}`} style={{ left: contextMenu.x, top: contextMenu.y }}>
       <button className="edit-menu-item" role="menuitem" onClick={() => editFile(contextMenu.file)}>Edit video</button>
+      <button className="duplicate-menu-item" role="menuitem" onClick={() => void duplicateFile(contextMenu.file)}>Duplicate</button>
       <button role="menuitem" onClick={() => void moveFileToTrash(contextMenu.file)}>Move to Trash</button>
     </div>}
   </div>
