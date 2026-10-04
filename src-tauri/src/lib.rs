@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::{fs, path::{Path, PathBuf}, process::Command, sync::Mutex};
+use std::{fs, io, path::{Path, PathBuf}, process::{Command, Output}, sync::Mutex};
 #[cfg(desktop)]
 use tauri::Manager;
 #[cfg(desktop)]
@@ -100,35 +100,90 @@ fn inspect_video(path: String, state: tauri::State<'_, AppState>) -> Result<serd
     if !resolved.is_file() || !video_file(&resolved) {
         return Err("Select a supported video file".into());
     }
-    let probe = std::env::var_os("FFPROBE_PATH").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("ffprobe"));
-    let output = Command::new(probe)
-        .args(["-v", "error", "-show_format", "-show_streams", "-show_chapters", "-of", "json"])
-        .arg(&resolved)
-        .output()
-        .map_err(|error| if error.kind() == std::io::ErrorKind::NotFound {
-            "ffprobe was not found. Install FFmpeg and add ffprobe to PATH, or set FFPROBE_PATH.".to_string()
-        } else { format!("Cannot start ffprobe: {error}") })?;
+    let output = run_ffprobe(&resolved)
+        .map_err(|error| {
+            log::error!("ffprobe could not start: {error}");
+            if error.kind() == io::ErrorKind::NotFound {
+                "ffprobe was not found. Install FFmpeg and add ffprobe to PATH, or set FFPROBE_PATH.".to_string()
+            } else { format!("Cannot start ffprobe: {error}") }
+        })?;
     if !output.status.success() {
         let details = String::from_utf8_lossy(&output.stderr);
+        log::error!("ffprobe failed: {}", details.trim());
         return Err(format!("Could not inspect video: {}", details.trim()));
     }
-    serde_json::from_slice(&output.stdout).map_err(|error| format!("Invalid ffprobe output: {error}"))
+    serde_json::from_slice(&output.stdout).map_err(|error| {
+        log::error!("ffprobe returned invalid JSON: {error}");
+        format!("Invalid ffprobe output: {error}")
+    })
+}
+
+fn execute_ffprobe(probe: &Path, video: &Path) -> io::Result<Output> {
+    Command::new(probe)
+        .args(["-v", "error", "-show_format", "-show_streams", "-show_chapters", "-of", "json"])
+        .arg(video)
+        .output()
+}
+
+fn run_ffprobe(video: &Path) -> io::Result<Output> {
+    if let Some(configured) = std::env::var_os("FFPROBE_PATH") {
+        return execute_ffprobe(Path::new(&configured), video);
+    }
+    match execute_ffprobe(Path::new("ffprobe"), video) {
+        #[cfg(windows)]
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if let Some(probe) = winget_ffprobe() {
+                log::info!("Using ffprobe from Windows Package Manager: {}", probe.display());
+                execute_ffprobe(&probe, video)
+            } else { Err(error) }
+        }
+        result => result,
+    }
+}
+
+#[cfg(windows)]
+fn winget_ffprobe() -> Option<PathBuf> {
+    let packages = PathBuf::from(std::env::var_os("LOCALAPPDATA")?)
+        .join("Microsoft").join("WinGet").join("Packages");
+    for package in fs::read_dir(packages).ok()?.flatten() {
+        if !package.file_name().to_string_lossy().to_ascii_lowercase().contains("ffmpeg") {
+            continue;
+        }
+        let direct = package.path().join("bin").join("ffprobe.exe");
+        if direct.is_file() { return Some(direct); }
+        let Ok(installations) = fs::read_dir(package.path()) else { continue; };
+        for installation in installations.flatten() {
+            let candidate = installation.path().join("bin").join("ffprobe.exe");
+            if candidate.is_file() { return Some(candidate); }
+        }
+    }
+    None
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_log::Builder::new()
+            .level(log::LevelFilter::Info)
+            .max_file_size(1_000_000)
+            .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(2))
+            .build())
+        .plugin(tauri_plugin_dialog::init());
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
     #[cfg(desktop)]
     let builder = builder.on_window_event(|window, event| {
         if let tauri::WindowEvent::CloseRequested { .. } = event {
             if let Err(error) = window.app_handle().save_window_state(StateFlags::all()) {
-                eprintln!("Could not save window state: {error}");
+                log::error!("Could not save window state: {error}");
             }
         }
     });
     builder
+        .setup(|_| {
+            log::info!("Framewise started");
+            Ok(())
+        })
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![select_root, list_directory, inspect_video])
         .run(tauri::generate_context!())

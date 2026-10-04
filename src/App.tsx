@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties, KeyboardEvent, PointerEvent } from 'react'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, isTauri } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
+import { error as logError } from '@tauri-apps/plugin-log'
 import './App.css'
 import './panels.css'
 import './settings.css'
@@ -74,6 +75,11 @@ function bitrate(rate?: string) {
 }
 
 function errorText(error: unknown) { return error instanceof Error ? error.message : String(error) }
+function reportError(context: string, cause: unknown) {
+  const message = errorText(cause)
+  if (isTauri()) void logError(`${context}: ${message}`).catch(() => {})
+  return message
+}
 function display(value: unknown) { return value === undefined || value === null || value === '' ? '—' : String(value) }
 function savedPanelState(key: string) { return window.localStorage.getItem(key) === 'true' }
 function savedPanelWidth(key: string, fallback: number) {
@@ -145,7 +151,7 @@ function App() {
       })
       .catch(cause => {
         if (!active || currentRequest !== requestId.current) return
-        setSettingsError(`Could not open the startup folder: ${errorText(cause)}`)
+        setSettingsError(`Could not open the startup folder: ${reportError('Opening startup folder', cause)}`)
         setView('settings')
       })
       .finally(() => { if (active && currentRequest === requestId.current) setStartupLoading(false) })
@@ -242,7 +248,7 @@ function App() {
       pendingFocus.current = {}
       setRoot(next.path); setListing(next); setSelected(null); setProbe(null); setError(null); setView('media'); setStartupLoading(false)
       inspectFocusedVideo(next, {})
-    } catch (cause) { setError(errorText(cause)) }
+    } catch (cause) { setError(reportError('Choosing media folder', cause)) }
   }
 
   async function chooseDefaultFolder() {
@@ -255,7 +261,7 @@ function App() {
       window.localStorage.setItem('framewise.defaultFolder', next.path)
       setDefaultFolder(next.path); setSettingsError(null); setStartupLoading(false)
       setRoot(next.path); setListing(next); setSelected(null); setProbe(null); setError(null)
-    } catch (cause) { setSettingsError(errorText(cause)) }
+    } catch (cause) { setSettingsError(reportError('Choosing startup folder', cause)) }
   }
 
   function useCurrentAsDefault() {
@@ -285,7 +291,7 @@ function App() {
       pendingFocus.current = focusTarget ?? null
       setListing(next); setSelected(null); setProbe(null); setError(null); setLoading(false); setView('media')
       if (focusTarget) inspectFocusedVideo(next, focusTarget)
-    } catch (cause) { setError(errorText(cause)) }
+    } catch (cause) { setError(reportError('Browsing folder', cause)) }
   }
 
   function inspectFocusedVideo(directory: DirectoryListing, focusTarget: { path?: string }) {
@@ -306,7 +312,7 @@ function App() {
       const result = await invoke<Probe>('inspect_video', { path: file.path })
       if (currentRequest === requestId.current) setProbe(result)
     } catch (cause) {
-      if (currentRequest === requestId.current) setError(errorText(cause))
+      if (currentRequest === requestId.current) setError(reportError('Inspecting video', cause))
     } finally {
       if (currentRequest === requestId.current) setLoading(false)
     }
@@ -339,7 +345,7 @@ function App() {
       await navigator.clipboard.writeText(JSON.stringify(probe, null, 2))
       setCopyDone(true)
       window.setTimeout(() => setCopyDone(false), 1800)
-    } catch (cause) { setError(`Could not copy metadata: ${errorText(cause)}`) }
+    } catch (cause) { setError(`Could not copy metadata: ${reportError('Copying metadata', cause)}`) }
   }
 
   const video = probe?.streams?.find(stream => stream.codec_type === 'video')
