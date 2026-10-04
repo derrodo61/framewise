@@ -1,5 +1,9 @@
 use serde::Serialize;
 use std::{fs, path::{Path, PathBuf}, process::Command, sync::Mutex};
+#[cfg(desktop)]
+use tauri::Manager;
+#[cfg(desktop)]
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 #[derive(Default)]
 struct AppState(Mutex<Option<PathBuf>>);
@@ -113,13 +117,18 @@ fn inspect_video(path: String, state: tauri::State<'_, AppState>) -> Result<serd
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .setup(|app| {
-            #[cfg(desktop)]
-            app.handle().plugin(tauri_plugin_window_state::Builder::default().build())?;
-            Ok(())
-        })
+    let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
+    #[cfg(desktop)]
+    let builder = builder.on_window_event(|window, event| {
+        if let tauri::WindowEvent::CloseRequested { .. } = event {
+            if let Err(error) = window.app_handle().save_window_state(StateFlags::all()) {
+                eprintln!("Could not save window state: {error}");
+            }
+        }
+    });
+    builder
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![select_root, list_directory, inspect_video])
         .run(tauri::generate_context!())
