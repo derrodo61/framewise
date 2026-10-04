@@ -1,7 +1,6 @@
 .file-row:focus {
   position: relative;
   z-index: 1;
-  background: #edf4ff;
   outline: 2px solid #77a4f4;
   outline-offset: -2px;
 }

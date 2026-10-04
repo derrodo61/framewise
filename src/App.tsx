@@ -237,6 +237,7 @@ function App() {
       if (currentRequest !== requestId.current) return
       pendingFocus.current = {}
       setRoot(next.path); setListing(next); setSelected(null); setProbe(null); setError(null); setView('media'); setStartupLoading(false)
+      inspectFocusedVideo(next, {})
     } catch (cause) { setError(errorText(cause)) }
   }
 
@@ -273,7 +274,15 @@ function App() {
       if (currentRequest !== requestId.current) return
       pendingFocus.current = focusTarget ?? null
       setListing(next); setSelected(null); setProbe(null); setError(null); setLoading(false); setView('media')
+      if (focusTarget) inspectFocusedVideo(next, focusTarget)
     } catch (cause) { setError(errorText(cause)) }
+  }
+
+  function inspectFocusedVideo(directory: DirectoryListing, focusTarget: { path?: string }) {
+    const entry = focusTarget.path
+      ? directory.entries.find(item => item.path === focusTarget.path)
+      : directory.entries[0]
+    if (entry && !entry.isDirectory) void selectFile(entry)
   }
 
   async function selectFile(file: FileEntry, delayMs = 0) {
