@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import './App.css'
+import './panels.css'
 
 type FileEntry = { name: string; path: string; isDirectory: boolean; size: number | null }
 type DirectoryListing = { path: string; parent: string | null; entries: FileEntry[] }
@@ -67,6 +68,7 @@ function bitrate(rate?: string) {
 
 function errorText(error: unknown) { return error instanceof Error ? error.message : String(error) }
 function display(value: unknown) { return value === undefined || value === null || value === '' ? '—' : String(value) }
+function savedPanelState(key: string) { return window.localStorage.getItem(key) === 'true' }
 
 function Property({ label, value }: { label: string; value: unknown }) {
   return <div className="property"><dt>{label}</dt><dd>{display(value)}</dd></div>
@@ -80,7 +82,23 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [copyDone, setCopyDone] = useState(false)
+  const [workspaceCollapsed, setWorkspaceCollapsed] = useState(() => savedPanelState('framewise.workspaceCollapsed'))
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(() => savedPanelState('framewise.inspectorCollapsed'))
   const requestId = useRef(0)
+
+  function toggleWorkspace() {
+    setWorkspaceCollapsed(current => {
+      window.localStorage.setItem('framewise.workspaceCollapsed', String(!current))
+      return !current
+    })
+  }
+
+  function toggleInspector() {
+    setInspectorCollapsed(current => {
+      window.localStorage.setItem('framewise.inspectorCollapsed', String(!current))
+      return !current
+    })
+  }
 
   async function chooseFolder() {
     try {
@@ -135,15 +153,18 @@ function App() {
       <button className="choose-button" onClick={chooseFolder}><Icon name="folder" size={17} /> Choose folder</button>
     </header>
 
-    <div className="workspace">
-      <aside className="sidebar">
-        <div className="sidebar-heading">WORKSPACE</div>
-        {root ? <>
+    <div className={`workspace ${workspaceCollapsed ? 'left-collapsed' : ''} ${inspectorCollapsed ? 'right-collapsed' : ''}`}>
+      <aside className={`sidebar ${workspaceCollapsed ? 'collapsed' : ''}`} aria-label="Workspace">
+        <div className="sidebar-heading">
+          {!workspaceCollapsed && <span>WORKSPACE</span>}
+          <button className="panel-toggle workspace-toggle" onClick={toggleWorkspace} aria-label={workspaceCollapsed ? 'Expand workspace' : 'Collapse workspace'} aria-expanded={!workspaceCollapsed} title={workspaceCollapsed ? 'Expand workspace' : 'Collapse workspace'}><Icon name="chevron" size={17} /></button>
+        </div>
+        {workspaceCollapsed ? root && <button className="rail-icon" onClick={() => browse(root)} title="Go to selected folder" aria-label="Go to selected folder"><Icon name="folder" size={20} /></button> : root ? <>
           <button className="root-item" onClick={() => browse(root)} title={root}><Icon name="folder" size={19} /><span>{root.split(/[\\/]/).filter(Boolean).at(-1) || root}</span></button>
           <div className="sidebar-section-label">CURRENT FOLDER</div>
           <div className="sidebar-current" title={listing?.path}>{listing?.path}</div>
         </> : <div className="sidebar-hint">Choose a folder to see your videos here.</div>}
-        <div className="sidebar-bottom"><span className="status-dot" /> Files stay on your device</div>
+        {!workspaceCollapsed && <div className="sidebar-bottom"><span className="status-dot" /> Files stay on your device</div>}
       </aside>
 
       <main className="main-panel">
@@ -175,9 +196,13 @@ function App() {
         </>}
       </main>
 
-      <section className="details-panel" aria-label="Video metadata">
-        <div className="details-top"><div><div className="eyebrow">INSPECTOR</div><h2>File details</h2></div>{probe && <button className="icon-button" onClick={copyMetadata} title="Copy raw metadata" aria-label="Copy raw metadata"><Icon name={copyDone ? 'check' : 'copy'} size={17} /></button>}</div>
-        {selected ? <div className="details-body">
+      <section className={`details-panel ${inspectorCollapsed ? 'collapsed' : ''}`} aria-label="Video metadata">
+        <div className="details-top">
+          {!inspectorCollapsed && <div><div className="eyebrow">INSPECTOR</div><h2>File details</h2></div>}
+          <div className="details-actions">{!inspectorCollapsed && probe && <button className="icon-button" onClick={copyMetadata} title="Copy raw metadata" aria-label="Copy raw metadata"><Icon name={copyDone ? 'check' : 'copy'} size={17} /></button>}
+          <button className="panel-toggle inspector-toggle" onClick={toggleInspector} aria-label={inspectorCollapsed ? 'Expand inspector' : 'Collapse inspector'} aria-expanded={!inspectorCollapsed} title={inspectorCollapsed ? 'Expand inspector' : 'Collapse inspector'}><Icon name="chevron" size={17} /></button></div>
+        </div>
+        {!inspectorCollapsed && (selected ? <div className="details-body">
           <div className="selected-file"><span className="selected-file-icon"><Icon name="film" size={27} /></span><div><strong title={selected.name}>{selected.name}</strong><span>{fileSize(selected.size)}</span></div></div>
           {loading && <div className="notice">Reading video metadata…</div>}
           {error && <div className="notice error" role="alert"><Icon name="info" size={18} /><span>{error}</span><button onClick={() => setError(null)} aria-label="Dismiss error"><Icon name="close" size={15} /></button></div>}
@@ -192,7 +217,7 @@ function App() {
             {Object.keys(probe.format?.tags ?? {}).length ? <dl className="property-list">{Object.entries(probe.format?.tags ?? {}).map(([key, value]) => <Property key={key} label={key} value={value} />)}</dl> : <p className="no-data">No embedded tags found.</p>}
             <details className="raw-details"><summary>View raw metadata</summary><pre>{JSON.stringify(probe, null, 2)}</pre></details>
           </>}
-        </div> : <div className="details-empty"><div className="details-empty-icon"><Icon name="info" size={27} /></div><h3>Nothing selected</h3><p>Choose a video from the browser to see its metadata here.</p>{error && <div className="notice error" role="alert">{error}</div>}</div>}
+        </div> : <div className="details-empty"><div className="details-empty-icon"><Icon name="info" size={27} /></div><h3>Nothing selected</h3><p>Choose a video from the browser to see its metadata here.</p>{error && <div className="notice error" role="alert">{error}</div>}</div>)}
       </section>
     </div>
   </div>
