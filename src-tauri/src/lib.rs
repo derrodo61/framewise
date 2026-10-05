@@ -20,6 +20,7 @@ struct FileEntry {
     path: String,
     is_directory: bool,
     size: Option<u64>,
+    modified_at: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -90,11 +91,15 @@ fn list_folder(path: &Path, root: &Path) -> Result<DirectoryListing, String> {
             continue;
         }
         let path = item.path();
+        let metadata = item.metadata().ok();
         entries.push(FileEntry {
             name: item.file_name().to_string_lossy().into_owned(),
             path: path.to_string_lossy().into_owned(),
             is_directory: file_type.is_dir(),
-            size: if file_type.is_file() { item.metadata().ok().map(|metadata| metadata.len()) } else { None },
+            size: if file_type.is_file() { metadata.as_ref().map(|metadata| metadata.len()) } else { None },
+            modified_at: metadata.and_then(|metadata| metadata.modified().ok())
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .and_then(|duration| u64::try_from(duration.as_millis()).ok()),
         });
     }
     entries.sort_by(|a, b| b.is_directory.cmp(&a.is_directory).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));

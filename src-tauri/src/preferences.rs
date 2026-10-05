@@ -8,6 +8,9 @@ const WINDOW_STATE_FILE: &str = "window-state.json";
 const SETTINGS_KEYS: &[&str] = &[
     "framewise.defaultFolder",
     "framewise.theme",
+    "framewise.mediaView",
+    "framewise.mediaSort",
+    "framewise.sortDirection",
     "framewise.workspaceCollapsed",
     "framewise.inspectorCollapsed",
     "framewise.workspaceWidth",
@@ -110,6 +113,9 @@ mod tests {
         let path = folder.join(SETTINGS_FILE);
         let mut values = BTreeMap::new();
         values.insert("framewise.theme".into(), "dark".into());
+        values.insert("framewise.mediaView".into(), "grid".into());
+        values.insert("framewise.mediaSort".into(), "modified".into());
+        values.insert("framewise.sortDirection".into(), "desc".into());
         values.insert("framewise.defaultFolder".into(), "C:\\media".into());
         write_settings(&path, values.clone()).unwrap();
         assert_eq!(read_settings(&path).unwrap(), Some(values));

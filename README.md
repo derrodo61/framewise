@@ -5,6 +5,8 @@ A local desktop app for browsing folders and inspecting video metadata. Built wi
 ## What it does
 
 - Choose a folder and browse its subfolders and supported video files.
+- Switch between a compact List and a Grid with video thumbnails and filenames. The view choice is saved; grid thumbnails load near the visible area and reuse the preview cache.
+- Sort either view by filename or date modified, ascending or descending. Folders stay first; sorting choices are saved.
 - Create a subfolder directly from the media file list.
 - Click a video to see container, video, audio, and embedded tag metadata.
 - See a thumbnail in the Inspector and click Play to watch the video in the same space.
@@ -14,6 +16,7 @@ A local desktop app for browsing folders and inspecting video metadata. Built wi
 - Select several videos with Ctrl-click or Shift-click (Command-click on macOS), then right-click a selected video and choose Move to. The separate destination window can browse folders, jump to another location, create a folder, and move the selected videos there.
 - Open the editor from the Inspector, scrub through a video, mark one section to remove, preview the cut, and undo it. Save As creates an MP4; Save replaces an MP4 after rendering and verification.
 - Use the Up and Down arrow keys to move through the file list, including folders and “Go back.” Press Enter to open a focused folder.
+- In Grid view, use Left and Right to move between cards, and Up and Down to move between rows.
 - Collapse either side panel to give the video browser more room. Panel choices are saved locally.
 - Drag the dividers to resize Workspace and Inspector, or focus a divider and use the arrow keys. Widths are saved locally.
 - Set a startup folder in Settings so it opens automatically the next time the app starts.

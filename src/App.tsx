@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent } from 'react'
 import { convertFileSrc, invoke, isTauri } from '@tauri-apps/api/core'
@@ -7,6 +7,11 @@ import { error as logError, info as logInfo } from '@tauri-apps/plugin-log'
 import { listen } from '@tauri-apps/api/event'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import Editor from './Editor'
+import MediaThumbnail from './MediaThumbnail'
+import { generateThumbnail } from './thumbnailQueue'
+import { nextMediaIndex } from './mediaNavigation'
+import { sortMedia } from './mediaSort'
+import type { MediaSort, SortDirection } from './mediaSort'
 import type { EditResult } from './Editor'
 import { displayPath, versionedMediaSrc } from './paths'
 import { getPreference, setPreference, removePreference } from './preferences'
@@ -17,8 +22,9 @@ import './navigation.css'
 import './theme.css'
 import './preview.css'
 import './file-actions.css'
+import './media-view.css'
 
-type FileEntry = { name: string; path: string; isDirectory: boolean; size: number | null }
+type FileEntry = { name: string; path: string; isDirectory: boolean; size: number | null; modifiedAt: number | null }
 type DirectoryListing = { path: string; parent: string | null; entries: FileEntry[] }
 type TrashBatchResult = { listing: DirectoryListing; movedCount: number; error: string | null }
 type DuplicateResult = { listing: DirectoryListing; duplicatedPath: string }
@@ -139,7 +145,7 @@ function VideoPreview({ file }: { file: FileEntry }) {
         if (result.thumbnailPath) return
         setThumbnailPending(true)
         timer = window.setTimeout(() => {
-          invoke<string | null>('generate_preview_thumbnail', { path: file.path })
+          generateThumbnail(file.path, () => active, true)
             .then(thumbnailPath => {
               if (active && thumbnailPath) setPreview(current => current ? { ...current, thumbnailPath } : current)
             })
@@ -183,8 +189,12 @@ function VideoPreview({ file }: { file: FileEntry }) {
 }
 
 function App() {
+  const [mediaView, setMediaView] = useState<'list' | 'grid'>(() => getPreference('framewise.mediaView') === 'grid' ? 'grid' : 'list')
+  const [mediaSort, setMediaSort] = useState<MediaSort>(() => getPreference('framewise.mediaSort') === 'modified' ? 'modified' : 'name')
+  const [sortDirection, setSortDirection] = useState<SortDirection>(() => getPreference('framewise.sortDirection') === 'desc' ? 'desc' : 'asc')
   const [root, setRoot] = useState<string | null>(null)
   const [listing, setListing] = useState<DirectoryListing | null>(null)
+  const mediaEntries = useMemo(() => sortMedia(listing?.entries ?? [], mediaSort, sortDirection), [listing, mediaSort, sortDirection])
   const [selected, setSelected] = useState<FileEntry | null>(null)
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [probe, setProbe] = useState<Probe | null>(null)
@@ -440,7 +450,7 @@ function App() {
   function inspectFocusedVideo(directory: DirectoryListing, focusTarget: { path?: string }) {
     const entry = focusTarget.path
       ? directory.entries.find(item => item.path === focusTarget.path)
-      : directory.entries[0]
+      : sortMedia(directory.entries, mediaSort, sortDirection)[0]
     if (entry && !entry.isDirectory) void selectFile(entry)
   }
 
@@ -481,17 +491,20 @@ function App() {
 
   useEffect(() => { listingRef.current = listing }, [listing])
 
+  const refreshMovedFiles = useEffectEvent(({ count, sourceFolder, destination }: MoveResult) => {
+    const message = `Moved ${count} ${count === 1 ? 'video' : 'videos'} to ${displayPath(destination)}.`
+    const current = listingRef.current
+    if (current && (current.path === sourceFolder || current.path === destination)) {
+      void browse(current.path).then(() => setFileAction({ message, error: false }))
+    } else setFileAction({ message, error: false })
+  })
+
   useEffect(() => {
     let active = true
     let unlisten: (() => void) | null = null
     void listen<MoveResult>('files-moved', event => {
       if (!active) return
-      const { count, sourceFolder, destination } = event.payload
-      const message = `Moved ${count} ${count === 1 ? 'video' : 'videos'} to ${displayPath(destination)}.`
-      const current = listingRef.current
-      if (current && (current.path === sourceFolder || current.path === destination)) {
-        void browse(current.path).then(() => setFileAction({ message, error: false }))
-      } else setFileAction({ message, error: false })
+      refreshMovedFiles(event.payload)
     }).then(stop => { if (active) unlisten = stop; else stop() })
       .catch(cause => reportError('Listening for moved videos', cause))
     return () => { active = false; unlisten?.() }
@@ -507,9 +520,9 @@ function App() {
     if (entry.isDirectory) { void browse(entry.path); return }
     const additive = modifiers.ctrlKey || modifiers.metaKey
     if (modifiers.shiftKey && listing) {
-      const anchor = listing.entries.findIndex(item => item.path === selectionAnchor.current)
+      const anchor = mediaEntries.findIndex(item => item.path === selectionAnchor.current)
       const from = anchor < 0 ? index : anchor
-      const range = listing.entries.slice(Math.min(from, index), Math.max(from, index) + 1).filter(item => !item.isDirectory).map(item => item.path)
+      const range = mediaEntries.slice(Math.min(from, index), Math.max(from, index) + 1).filter(item => !item.isDirectory).map(item => item.path)
       setSelectedPaths(additive ? [...new Set([...selectedPaths, ...range])] : range)
       void selectFile(entry, 0, true)
     } else if (additive) {
@@ -631,9 +644,10 @@ function App() {
         : await invoke<TrashBatchResult>('move_videos_to_trash', { paths })
       if (currentRequest !== requestId.current) return
       const next = result.listing
-      const oldIndex = listing?.entries.findIndex(entry => entry.path === file.path) ?? 0
-      const remaining = result.error ? next.entries.filter(entry => paths.includes(entry.path)) : []
-      const nearby = remaining[0] ?? next.entries[Math.min(Math.max(oldIndex, 0), next.entries.length - 1)]
+      const oldIndex = mediaEntries.findIndex(entry => entry.path === file.path)
+      const nextEntries = sortMedia(next.entries, mediaSort, sortDirection)
+      const remaining = result.error ? nextEntries.filter(entry => paths.includes(entry.path)) : []
+      const nearby = remaining[0] ?? nextEntries[Math.min(Math.max(oldIndex, 0), nextEntries.length - 1)]
       pendingFocus.current = nearby ? { path: nearby.path } : null
       setListing(next)
       setSelectedPaths(remaining.map(entry => entry.path))
@@ -662,23 +676,24 @@ function App() {
     if (!focused || !event.currentTarget.contains(focused)) return
     if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
       event.preventDefault()
-      const entry = listing?.entries[Number(focused.dataset.entryIndex)]
+      const entry = mediaEntries[Number(focused.dataset.entryIndex)]
       if (entry) {
         const bounds = focused.getBoundingClientRect()
         openFileMenu(entry, bounds.left + 24, bounds.bottom - 6)
       }
       return
     }
-    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+    if (!['ArrowUp', 'ArrowDown', ...(mediaView === 'grid' ? ['ArrowLeft', 'ArrowRight'] : [])].includes(event.key)) return
     const rows = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[data-list-row]'))
     const currentIndex = rows.indexOf(focused)
     if (currentIndex < 0) return
     event.preventDefault()
-    const nextIndex = Math.max(0, Math.min(rows.length - 1, currentIndex + (event.key === 'ArrowDown' ? 1 : -1)))
+    const columns = mediaView === 'grid' ? getComputedStyle(event.currentTarget).gridTemplateColumns.split(' ').length : 1
+    const nextIndex = nextMediaIndex(currentIndex, rows.length, columns, event.key)
     if (nextIndex === currentIndex) return
     rows[nextIndex].focus()
     const entryIndex = Number(rows[nextIndex].dataset.entryIndex)
-    const next = listing?.entries[entryIndex]
+    const next = mediaEntries[entryIndex]
     if (next && !next.isDirectory) {
       selectMediaEntry(next, entryIndex, event)
     } else {
@@ -820,10 +835,17 @@ function App() {
           {duplicatingFile && <div className="file-action progress" role="status">Duplicating “{duplicatingFile}”…</div>}
           {deleting && <div className="file-action progress" role="status">Moving to Trash…</div>}
           {fileAction && <div className={`file-action ${fileAction.error ? 'error' : ''}`} role={fileAction.error ? 'alert' : 'status'}>{fileAction.message}</div>}
-          <div ref={fileListRef} className="file-list" role="group" aria-label="Files and folders" onKeyDown={navigateFiles}>
+          <div className="media-view-switch" role="group" aria-label="File view">
+            <label className="media-sort">Sort by <select value={mediaSort} onChange={event => { const value = event.target.value as MediaSort; setMediaSort(value); setPreference('framewise.mediaSort', value) }}><option value="name">Filename</option><option value="modified">Date modified</option></select></label>
+            <label className="media-sort"><span className="sort-order-label">Order</span><select aria-label="Sort order" value={sortDirection} onChange={event => { const value = event.target.value as SortDirection; setSortDirection(value); setPreference('framewise.sortDirection', value) }}><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
+            {(['list', 'grid'] as const).map(mode => <button key={mode} aria-pressed={mediaView === mode} onClick={() => { setMediaView(mode); setPreference('framewise.mediaView', mode) }}>{mode === 'list' ? 'List' : 'Grid'}</button>)}
+          </div>
+          <div ref={fileListRef} className={`file-list ${mediaView === 'grid' ? 'media-grid' : ''}`} role="group" aria-label="Files and folders" onKeyDown={navigateFiles}>
             {listing.parent && <button className="file-row back-row" data-list-row="true" data-entry-index="-1" data-path={listing.parent} onClick={() => browse(listing.parent!, { path: listing.path })}><span className="file-icon"><Icon name="arrow" size={18} /></span><span className="file-name">Go back</span></button>}
-            {listing.entries.map((entry, index) => <button key={entry.path} data-list-row="true" data-entry-index={index} data-path={entry.path} aria-pressed={entry.isDirectory ? undefined : selectedPaths.includes(entry.path)} className={`file-row ${selectedPaths.includes(entry.path) ? 'selected' : ''}`} onClick={event => selectMediaEntry(entry, index, event)} onContextMenu={event => fileContextMenu(event, entry)}>
-              <span className={`file-icon ${entry.isDirectory ? 'folder-icon' : 'video-icon'}`}><Icon name={entry.isDirectory ? 'folder' : 'film'} size={19} /></span>
+            {mediaEntries.map((entry, index) => <button key={entry.path} data-list-row="true" data-entry-index={index} data-path={entry.path} aria-pressed={entry.isDirectory ? undefined : selectedPaths.includes(entry.path)} className={`file-row ${selectedPaths.includes(entry.path) ? 'selected' : ''}`} onClick={event => selectMediaEntry(entry, index, event)} onContextMenu={event => fileContextMenu(event, entry)}>
+              {mediaView === 'grid' && !entry.isDirectory
+                ? <MediaThumbnail path={entry.path} revision={listing} placeholder={<Icon name="film" size={32} />} />
+                : <span className={`file-icon ${entry.isDirectory ? 'folder-icon' : 'video-icon'}`}><Icon name={entry.isDirectory ? 'folder' : 'film'} size={mediaView === 'grid' ? 32 : 19} /></span>}
               <span className="file-name" title={entry.name}>{entry.name}</span>
               <span className="file-kind">{entry.isDirectory ? 'Folder' : fileSize(entry.size)}</span>
               <Icon name="chevron" size={16} />

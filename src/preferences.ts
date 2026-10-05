@@ -4,6 +4,9 @@ import { error as logError } from '@tauri-apps/plugin-log'
 const keys = [
   'framewise.defaultFolder',
   'framewise.theme',
+  'framewise.mediaView',
+  'framewise.mediaSort',
+  'framewise.sortDirection',
   'framewise.workspaceCollapsed',
   'framewise.inspectorCollapsed',
   'framewise.workspaceWidth',
