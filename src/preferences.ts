@@ -5,6 +5,7 @@ const keys = [
   'framewise.defaultFolder',
   'framewise.theme',
   'framewise.mediaView',
+  'framewise.gridSize',
   'framewise.mediaSort',
   'framewise.sortDirection',
   'framewise.workspaceCollapsed',

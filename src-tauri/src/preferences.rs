@@ -9,6 +9,7 @@ const SETTINGS_KEYS: &[&str] = &[
     "framewise.defaultFolder",
     "framewise.theme",
     "framewise.mediaView",
+    "framewise.gridSize",
     "framewise.mediaSort",
     "framewise.sortDirection",
     "framewise.workspaceCollapsed",
@@ -114,6 +115,7 @@ mod tests {
         let mut values = BTreeMap::new();
         values.insert("framewise.theme".into(), "dark".into());
         values.insert("framewise.mediaView".into(), "grid".into());
+        values.insert("framewise.gridSize".into(), "large".into());
         values.insert("framewise.mediaSort".into(), "modified".into());
         values.insert("framewise.sortDirection".into(), "desc".into());
         values.insert("framewise.defaultFolder".into(), "C:\\media".into());

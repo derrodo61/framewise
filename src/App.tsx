@@ -190,6 +190,10 @@ function VideoPreview({ file }: { file: FileEntry }) {
 
 function App() {
   const [mediaView, setMediaView] = useState<'list' | 'grid'>(() => getPreference('framewise.mediaView') === 'grid' ? 'grid' : 'list')
+  const [gridSize, setGridSize] = useState<'small' | 'medium' | 'large'>(() => {
+    const saved = getPreference('framewise.gridSize')
+    return saved === 'small' || saved === 'large' ? saved : 'medium'
+  })
   const [mediaSort, setMediaSort] = useState<MediaSort>(() => getPreference('framewise.mediaSort') === 'modified' ? 'modified' : 'name')
   const [sortDirection, setSortDirection] = useState<SortDirection>(() => getPreference('framewise.sortDirection') === 'desc' ? 'desc' : 'asc')
   const [root, setRoot] = useState<string | null>(null)
@@ -839,8 +843,9 @@ function App() {
             <label className="media-sort">Sort by <select value={mediaSort} onChange={event => { const value = event.target.value as MediaSort; setMediaSort(value); setPreference('framewise.mediaSort', value) }}><option value="name">Filename</option><option value="modified">Date modified</option></select></label>
             <label className="media-sort"><span className="sort-order-label">Order</span><select aria-label="Sort order" value={sortDirection} onChange={event => { const value = event.target.value as SortDirection; setSortDirection(value); setPreference('framewise.sortDirection', value) }}><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
             {(['list', 'grid'] as const).map(mode => <button key={mode} aria-pressed={mediaView === mode} onClick={() => { setMediaView(mode); setPreference('framewise.mediaView', mode) }}>{mode === 'list' ? 'List' : 'Grid'}</button>)}
+            {mediaView === 'grid' && <label className="media-sort">Preview size <select value={gridSize} onChange={event => { const value = event.target.value as typeof gridSize; setGridSize(value); setPreference('framewise.gridSize', value) }}><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select></label>}
           </div>
-          <div ref={fileListRef} className={`file-list ${mediaView === 'grid' ? 'media-grid' : ''}`} role="group" aria-label="Files and folders" onKeyDown={navigateFiles}>
+          <div ref={fileListRef} className={`file-list ${mediaView === 'grid' ? `media-grid grid-size-${gridSize}` : ''}`} role="group" aria-label="Files and folders" onKeyDown={navigateFiles}>
             {listing.parent && <button className="file-row back-row" data-list-row="true" data-entry-index="-1" data-path={listing.parent} onClick={() => browse(listing.parent!, { path: listing.path })}><span className="file-icon"><Icon name="arrow" size={18} /></span><span className="file-name">Go back</span></button>}
             {mediaEntries.map((entry, index) => <button key={entry.path} data-list-row="true" data-entry-index={index} data-path={entry.path} aria-pressed={entry.isDirectory ? undefined : selectedPaths.includes(entry.path)} className={`file-row ${selectedPaths.includes(entry.path) ? 'selected' : ''}`} onClick={event => selectMediaEntry(entry, index, event)} onContextMenu={event => fileContextMenu(event, entry)}>
               {mediaView === 'grid' && !entry.isDirectory

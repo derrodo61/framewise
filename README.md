@@ -6,6 +6,7 @@ A local desktop app for browsing folders and inspecting video metadata. Built wi
 
 - Choose a folder and browse its subfolders and supported video files.
 - Switch between a compact List and a Grid with video thumbnails and filenames. The view choice is saved; grid thumbnails load near the visible area and reuse the preview cache.
+- Choose Small, Medium, or Large previews in Grid view. The size is saved and changes immediately using the cached images.
 - Sort either view by filename or date modified, ascending or descending. Folders stay first; sorting choices are saved.
 - Create a subfolder directly from the media file list.
 - Click a video to see container, video, audio, and embedded tag metadata.
