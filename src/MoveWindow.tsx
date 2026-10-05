@@ -7,7 +7,7 @@ import './move-window.css'
 
 type FileEntry = { name: string; path: string; isDirectory: boolean }
 type DirectoryListing = { path: string; parent: string | null; entries: FileEntry[] }
-type MoveSession = { sourceFolder: string; names: string[] }
+type MoveSession = { sourceFolder: string; names: string[]; directories: boolean }
 type MoveResult = { count: number; destination: string }
 
 function errorText(cause: unknown) { return cause instanceof Error ? cause.message : String(cause) }
@@ -67,7 +67,7 @@ export default function MoveWindow() {
       const result = await invoke<MoveResult>('move_selected', { destination: listing.path })
       setMoved(true)
       try { await getCurrentWindow().close() }
-      catch { setError(`Moved ${result.count} ${result.count === 1 ? 'video' : 'videos'}. You can close this window now.`) }
+      catch { setError(`Moved ${result.count} ${session.directories ? (result.count === 1 ? 'folder' : 'folders') : (result.count === 1 ? 'video' : 'videos')}. You can close this window now.`) }
     } catch (cause) { setError(errorText(cause)) }
     finally { setBusy(false) }
   }
@@ -77,8 +77,8 @@ export default function MoveWindow() {
   const sameFolder = listing?.path === session?.sourceFolder
 
   return <div className="move-window">
-    <header className="move-header"><span className="move-eyebrow">FRAMEWISE</span><h1>Move to</h1><p>{session ? `${session.names.length} ${session.names.length === 1 ? 'video' : 'videos'} selected` : 'Preparing files…'}</p></header>
-    {session && <details className="move-selection"><summary>Selected files</summary><ul>{session.names.map(name => <li key={name}>{name}</li>)}</ul></details>}
+    <header className="move-header"><span className="move-eyebrow">FRAMEWISE</span><h1>Move to</h1><p>{session ? `${session.names.length} ${session.directories ? (session.names.length === 1 ? 'folder' : 'folders') : (session.names.length === 1 ? 'video' : 'videos')} selected` : 'Preparing items…'}</p></header>
+    {session && <details className="move-selection"><summary>{session.directories ? 'Selected folders' : 'Selected files'}</summary><ul>{session.names.map(name => <li key={name}>{name}</li>)}</ul></details>}
     <div className="move-location"><span>DESTINATION</span><strong title={listing ? displayPath(listing.path) : undefined}>{listing ? displayPath(listing.path) : 'Loading folder…'}</strong><button onClick={() => void chooseFolder()} disabled={busy}>Choose another folder…</button></div>
     {error && <div className="move-error" role="alert">{error}</div>}
     <div className="move-list-toolbar">

@@ -30,7 +30,7 @@ type TrashBatchResult = { listing: DirectoryListing; movedCount: number; error: 
 type DuplicateResult = { listing: DirectoryListing; duplicatedPath: string }
 type RenameResult = { listing: DirectoryListing; renamedPath: string }
 type CreatedFolder = { listing: DirectoryListing; createdPath: string }
-type MoveResult = { count: number; sourceFolder: string; destination: string }
+type MoveResult = { count: number; sourceFolder: string; destination: string; directories: boolean }
 type ProbeStream = {
   index?: number; codec_type?: string; codec_name?: string; profile?: string
   width?: number; height?: number; r_frame_rate?: string; avg_frame_rate?: string
@@ -495,8 +495,9 @@ function App() {
 
   useEffect(() => { listingRef.current = listing }, [listing])
 
-  const refreshMovedFiles = useEffectEvent(({ count, sourceFolder, destination }: MoveResult) => {
-    const message = `Moved ${count} ${count === 1 ? 'video' : 'videos'} to ${displayPath(destination)}.`
+  const refreshMovedFiles = useEffectEvent(({ count, sourceFolder, destination, directories }: MoveResult) => {
+    const noun = directories ? (count === 1 ? 'folder' : 'folders') : (count === 1 ? 'video' : 'videos')
+    const message = `Moved ${count} ${noun} to ${displayPath(destination)}.`
     const current = listingRef.current
     if (current && (current.path === sourceFolder || current.path === destination)) {
       void browse(current.path).then(() => setFileAction({ message, error: false }))
@@ -510,35 +511,39 @@ function App() {
       if (!active) return
       refreshMovedFiles(event.payload)
     }).then(stop => { if (active) unlisten = stop; else stop() })
-      .catch(cause => reportError('Listening for moved videos', cause))
+      .catch(cause => reportError('Listening for moved items', cause))
     return () => { active = false; unlisten?.() }
   }, [])
 
   function openFileMenu(file: FileEntry, x: number, y: number) {
     if (deleting || duplicatingFile || renaming || renameTarget) return
-    if (!file.isDirectory && !selectedPaths.includes(file.path)) { selectionAnchor.current = file.path; void selectFile(file) }
-    setContextMenu({ file, x: Math.max(8, Math.min(x, window.innerWidth - 200)), y: Math.max(8, Math.min(y, window.innerHeight - (file.isDirectory ? 104 : 215))) })
+    if (!selectedPaths.includes(file.path)) { selectionAnchor.current = file.path; inspectSelection(file) }
+    setContextMenu({ file, x: Math.max(8, Math.min(x, window.innerWidth - 200)), y: Math.max(8, Math.min(y, window.innerHeight - (file.isDirectory ? 140 : 215))) })
+  }
+
+  function inspectSelection(entry: FileEntry | undefined, preserveMulti = false) {
+    if (entry && !entry.isDirectory) { void selectFile(entry, 0, preserveMulti); return }
+    requestId.current++
+    if (!preserveMulti) setSelectedPaths(entry ? [entry.path] : [])
+    setSelected(null); setProbe(null); setError(null); setLoading(false)
   }
 
   function selectMediaEntry(entry: FileEntry, index: number, modifiers: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) {
-    if (entry.isDirectory) { void browse(entry.path); return }
     const additive = modifiers.ctrlKey || modifiers.metaKey
+    if (entry.isDirectory && !additive && !modifiers.shiftKey) { void browse(entry.path); return }
+    const compatiblePaths = selectedPaths.filter(path => mediaEntries.some(item => item.path === path && item.isDirectory === entry.isDirectory))
     if (modifiers.shiftKey && listing) {
-      const anchor = mediaEntries.findIndex(item => item.path === selectionAnchor.current)
+      const anchor = mediaEntries.findIndex(item => item.path === selectionAnchor.current && item.isDirectory === entry.isDirectory)
       const from = anchor < 0 ? index : anchor
-      const range = mediaEntries.slice(Math.min(from, index), Math.max(from, index) + 1).filter(item => !item.isDirectory).map(item => item.path)
-      setSelectedPaths(additive ? [...new Set([...selectedPaths, ...range])] : range)
-      void selectFile(entry, 0, true)
+      const range = mediaEntries.slice(Math.min(from, index), Math.max(from, index) + 1).filter(item => item.isDirectory === entry.isDirectory).map(item => item.path)
+      if (anchor < 0) selectionAnchor.current = entry.path
+      setSelectedPaths(additive ? [...new Set([...compatiblePaths, ...range])] : range)
+      inspectSelection(entry, true)
     } else if (additive) {
       selectionAnchor.current = entry.path
-      const next = selectedPaths.includes(entry.path) ? selectedPaths.filter(path => path !== entry.path) : [...selectedPaths, entry.path]
+      const next = compatiblePaths.includes(entry.path) ? compatiblePaths.filter(path => path !== entry.path) : [...compatiblePaths, entry.path]
       setSelectedPaths(next)
-      if (next.includes(entry.path)) void selectFile(entry, 0, true)
-      else {
-        const fallback = listing?.entries.find(item => item.path === next.at(-1))
-        if (fallback) void selectFile(fallback, 0, true)
-        else { requestId.current++; setSelected(null); setProbe(null); setError(null); setLoading(false) }
-      }
+      inspectSelection(next.includes(entry.path) ? entry : mediaEntries.find(item => item.path === next.at(-1)), true)
     } else {
       selectionAnchor.current = entry.path
       void selectFile(entry)
@@ -552,7 +557,7 @@ function App() {
       const existing = await WebviewWindow.getByLabel('move-to')
       if (existing) { await existing.setFocus(); return }
       await invoke('begin_move', { paths })
-      const moveWindow = new WebviewWindow('move-to', { url: 'index.html?moveTo=1', title: 'Move videos — Framewise', width: 650, height: 680, minWidth: 480, minHeight: 500 })
+      const moveWindow = new WebviewWindow('move-to', { url: 'index.html?moveTo=1', title: 'Move to — Framewise', width: 650, height: 680, minWidth: 480, minHeight: 500 })
       await moveWindow.once('tauri://error', event => setFileAction({ message: `Could not open Move To window: ${String(event.payload)}`, error: true }))
     } catch (cause) { setFileAction({ message: reportError('Opening Move To window', cause), error: true }) }
   }
@@ -698,7 +703,7 @@ function App() {
     rows[nextIndex].focus()
     const entryIndex = Number(rows[nextIndex].dataset.entryIndex)
     const next = mediaEntries[entryIndex]
-    if (next && !next.isDirectory) {
+    if (next && (!next.isDirectory || event.ctrlKey || event.metaKey || event.shiftKey)) {
       selectMediaEntry(next, entryIndex, event)
     } else {
       requestId.current++
@@ -847,7 +852,7 @@ function App() {
           </div>
           <div ref={fileListRef} className={`file-list ${mediaView === 'grid' ? `media-grid grid-size-${gridSize}` : ''}`} role="group" aria-label="Files and folders" onKeyDown={navigateFiles}>
             {listing.parent && <button className="file-row back-row" data-list-row="true" data-entry-index="-1" data-path={listing.parent} onClick={() => browse(listing.parent!, { path: listing.path })}><span className="file-icon"><Icon name="arrow" size={18} /></span><span className="file-name">Go back</span></button>}
-            {mediaEntries.map((entry, index) => <button key={entry.path} data-list-row="true" data-entry-index={index} data-path={entry.path} aria-pressed={entry.isDirectory ? undefined : selectedPaths.includes(entry.path)} className={`file-row ${selectedPaths.includes(entry.path) ? 'selected' : ''}`} onClick={event => selectMediaEntry(entry, index, event)} onContextMenu={event => fileContextMenu(event, entry)}>
+            {mediaEntries.map((entry, index) => <button key={entry.path} data-list-row="true" data-entry-index={index} data-path={entry.path} aria-pressed={selectedPaths.includes(entry.path)} className={`file-row ${selectedPaths.includes(entry.path) ? 'selected' : ''}`} onClick={event => selectMediaEntry(entry, index, event)} onContextMenu={event => fileContextMenu(event, entry)}>
               {mediaView === 'grid' && !entry.isDirectory
                 ? <MediaThumbnail path={entry.path} revision={listing} placeholder={<Icon name="film" size={32} />} />
                 : <span className={`file-icon ${entry.isDirectory ? 'folder-icon' : 'video-icon'}`}><Icon name={entry.isDirectory ? 'folder' : 'film'} size={mediaView === 'grid' ? 32 : 19} /></span>}
@@ -856,7 +861,7 @@ function App() {
               <Icon name="chevron" size={16} />
             </button>)}
             {listing.entries.length === 0 && <div className="empty-list">No folders or supported video files here.</div>}
-            {(listing.parent || listing.entries.length > 0) && <div className="file-list-tip">Tip: Ctrl-click (⌘-click on Mac) or Shift-click to select several videos. Right-click a selected video to move or delete them together.</div>}
+            {(listing.parent || listing.entries.length > 0) && <div className="file-list-tip">Tip: Ctrl-click (⌘-click on Mac) or Shift-click to select several videos or folders. Right-click a selection to move it. A normal click opens a folder.</div>}
           </div>
         </>}
         </>}
@@ -893,6 +898,7 @@ function App() {
     {contextMenu && <div ref={contextMenuRef} className="file-context-menu" role="menu" aria-label={`Actions for ${contextMenu.file.name}`} style={{ left: contextMenu.x, top: contextMenu.y }}>
       {contextMenu.file.isDirectory ? <>
         <button className="rename-menu-item" role="menuitem" onClick={() => openRename(contextMenu.file)}>Rename folder</button>
+        <button className="move-menu-item" role="menuitem" onClick={() => void openMoveWindow(contextMenu.file)}>Move to…{selectedPaths.includes(contextMenu.file.path) && selectedPaths.length > 1 ? ` (${selectedPaths.length})` : ''}</button>
         <button role="menuitem" onClick={() => void moveEntryToTrash(contextMenu.file)}>Move folder to Trash</button>
       </> : <>
         <button className="edit-menu-item" role="menuitem" onClick={() => editFile(contextMenu.file)}>Edit video</button>
