@@ -124,13 +124,13 @@ function Property({ label, value }: { label: string; value: unknown }) {
   return <div className="property"><dt>{label}</dt><dd>{display(value)}</dd></div>
 }
 
-function VideoPreview({ file, playRequested, onPlayRequestHandled }: { file: FileEntry; playRequested: boolean; onPlayRequestHandled: () => void }) {
+function VideoPreview({ file, playbackAction, onPlayRequestHandled }: { file: FileEntry; playbackAction: 'play' | 'toggle' | null; onPlayRequestHandled: () => void }) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const lookupStartedAt = useRef(0)
   const [preview, setPreview] = useState<Preview | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [thumbnailPending, setThumbnailPending] = useState(false)
-  const [playing, setPlaying] = useState(false)
+  const [playerActive, setPlayerActive] = useState(false)
   const [playbackError, setPlaybackError] = useState(false)
 
   useEffect(() => {
@@ -167,30 +167,38 @@ function VideoPreview({ file, playRequested, onPlayRequestHandled }: { file: Fil
   }, [videoUrl])
 
   function startPlayback() {
-    if (!videoRef.current) return
+    const video = videoRef.current
+    if (!video) return
     setPlaybackError(false)
-    setPlaying(true)
-    void videoRef.current.play().catch(() => { setPlaying(false); setPlaybackError(true) })
+    setPlayerActive(true)
+    void video.play().catch(cause => {
+      // Pausing while playback is still starting can abort the play promise.
+      if (cause instanceof DOMException && cause.name === 'AbortError') return
+      if (videoRef.current !== video) return
+      setPlayerActive(false); setPlaybackError(true)
+    })
   }
 
   const playFromList = useEffectEvent(() => {
-    startPlayback()
+    const video = videoRef.current
+    if (playbackAction === 'toggle' && video && !video.paused && !video.ended) video.pause()
+    else startPlayback()
     onPlayRequestHandled()
   })
   useEffect(() => {
-    if (playRequested && videoUrl) playFromList()
-  }, [playRequested, videoUrl])
+    if (playbackAction && videoUrl) playFromList()
+  }, [playbackAction, videoUrl])
 
   return <section className="preview-section" aria-label="Video preview">
     <div className="section-title preview-title">PREVIEW</div>
-    <div className={`preview-frame ${playing ? 'is-playing' : ''}`}>
-      {videoUrl && <video ref={videoRef} src={videoUrl} poster={thumbnailUrl ?? undefined} preload="none" controls={playing} playsInline onError={() => { setPlaying(false); setPlaybackError(true) }} aria-label={`Playing ${file.name}`} />}
-      {!playing && (thumbnailUrl ? <img src={thumbnailUrl} alt={`Preview frame from ${file.name}`} onLoad={() => {
+    <div className={`preview-frame ${playerActive ? 'is-playing' : ''}`}>
+      {videoUrl && <video ref={videoRef} src={videoUrl} poster={thumbnailUrl ?? undefined} preload="none" controls={playerActive} playsInline onError={() => { setPlayerActive(false); setPlaybackError(true) }} aria-label={`Video ${file.name}`} />}
+      {!playerActive && (thumbnailUrl ? <img src={thumbnailUrl} alt={`Preview frame from ${file.name}`} onLoad={() => {
         const elapsed = Math.round(performance.now() - lookupStartedAt.current)
         if (elapsed > 250) void logInfo(`Preview image displayed after ${elapsed} ms: ${file.name}`)
       }} /> : <div className="preview-placeholder"><Icon name="film" size={36} /></div>)}
-      {preview && !playing && <button className="preview-play" onClick={startPlayback} aria-label={`Play ${file.name}`}><Icon name="play" size={24} /></button>}
-      {(!preview || (thumbnailPending && !playing)) && !previewError && <span className="preview-loading">Preparing preview…</span>}
+      {preview && !playerActive && <button className="preview-play" onClick={startPlayback} aria-label={`Play ${file.name}`}><Icon name="play" size={24} /></button>}
+      {(!preview || (thumbnailPending && !playerActive)) && !previewError && <span className="preview-loading">Preparing preview…</span>}
     </div>
     {previewError && <p className="preview-message" role="alert">Preview unavailable: {previewError}</p>}
     {playbackError && <p className="preview-message" role="alert">This video format may not play in the system WebView. The metadata remains available below.</p>}
@@ -209,7 +217,7 @@ function App() {
   const [listing, setListing] = useState<DirectoryListing | null>(null)
   const mediaEntries = useMemo(() => sortMedia(listing?.entries ?? [], mediaSort, sortDirection), [listing, mediaSort, sortDirection])
   const [selected, setSelected] = useState<FileEntry | null>(null)
-  const [playbackPath, setPlaybackPath] = useState<string | null>(null)
+  const [playbackRequest, setPlaybackRequest] = useState<{ path: string; action: 'play' | 'toggle' } | null>(null)
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [probe, setProbe] = useState<Probe | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -452,7 +460,7 @@ function App() {
 
   async function browse(path: string, focusTarget?: { path?: string }) {
     try {
-      setPlaybackPath(null)
+      setPlaybackRequest(null)
       setContextMenu(null); setFileAction(null)
       const currentRequest = ++requestId.current
       const next = await invoke<DirectoryListing>('list_directory', { path })
@@ -471,7 +479,7 @@ function App() {
   }
 
   async function selectFile(file: FileEntry, delayMs = 0, preserveMulti = false) {
-    setPlaybackPath(null)
+    setPlaybackRequest(null)
     const currentRequest = ++requestId.current
     if (!preserveMulti) setSelectedPaths([file.path])
     setSelected(file); setProbe(null); setError(null); setLoading(true)
@@ -569,7 +577,7 @@ function App() {
     }
   }
 
-  function playMediaEntry(entry: FileEntry) {
+  function playMediaEntry(entry: FileEntry, action: 'play' | 'toggle' = 'play') {
     if (entry.isDirectory) return
     // Select explicitly so modifier-clicks cannot leave a different video in the Inspector.
     selectionAnchor.current = entry.path
@@ -579,7 +587,7 @@ function App() {
       setInspectorCollapsed(false)
       setPreference('framewise.inspectorCollapsed', 'false')
     }
-    setPlaybackPath(entry.path)
+    setPlaybackRequest({ path: entry.path, action })
   }
 
   async function openMoveWindow(file: FileEntry) {
@@ -728,7 +736,7 @@ function App() {
       if (entry && !entry.isDirectory) {
         // Prevent the button's default click from clearing the playback request.
         event.preventDefault()
-        if (!event.repeat) playMediaEntry(entry)
+        if (!event.repeat) playMediaEntry(entry, 'toggle')
       }
       return
     }
@@ -923,7 +931,7 @@ function App() {
           <button className="panel-toggle inspector-toggle" onClick={toggleInspector} aria-label={inspectorCollapsed ? 'Expand inspector' : 'Collapse inspector'} aria-expanded={!inspectorCollapsed} title={inspectorCollapsed ? 'Expand inspector' : 'Collapse inspector'}><Icon name="chevron" size={17} /></button></div>
         </div>
         {!inspectorCollapsed && (selected ? <div key={selected.path} className="details-body">
-          <VideoPreview file={selected} playRequested={playbackPath === selected.path} onPlayRequestHandled={() => setPlaybackPath(null)} />
+          <VideoPreview file={selected} playbackAction={playbackRequest?.path === selected.path ? playbackRequest.action : null} onPlayRequestHandled={() => setPlaybackRequest(null)} />
           <div className="selected-file"><span className="selected-file-icon"><Icon name="film" size={27} /></span><div><strong title={selected.name}>{selected.name}</strong><span>{fileSize(selected.size)}</span></div></div>
           {probe && video && <button className="inspector-edit" onClick={() => editFile(selected)}>Edit video</button>}
           {loading && <div className="notice">Reading video metadata…</div>}

@@ -12,7 +12,7 @@ A local desktop app for browsing folders and inspecting video metadata. Built wi
 - Click a video to see container, video, audio, and embedded tag metadata.
 - See and copy positive and negative generation prompts in the Inspector. Embedded WAN2GP JSON and ComfyUI execution graphs are detected; ComfyUI extraction follows active output connections. Unknown formats, missing prompts, and unsupported text transformations are explained. Sidecar files and workflow-only prompt reconstruction are not supported yet.
 - See a thumbnail in the Inspector and click Play to watch the video in the same space.
-- Double-click a video in List or Grid view, or press Enter on a focused video, to start it in the Inspector. A collapsed Inspector opens automatically.
+- Double-click a video in List or Grid view to start it in the Inspector. Press Enter on a focused video to toggle playback between playing and paused. A collapsed Inspector opens automatically.
 - Right-click a video to move it to the system Trash or Recycle Bin after confirmation.
 - With focus in the file list, press Delete (or Backspace on macOS) to open the Trash confirmation for the selected videos, including multiple selections.
 - Right-click a subfolder to move it and its contents to Trash after confirmation.
