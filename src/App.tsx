@@ -9,6 +9,9 @@ import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import Editor from './Editor'
 import GenerationPrompt from './GenerationPrompt'
 import TagSettings from './TagSettings'
+import TagFilter from './TagFilter'
+import { useTagFilter } from './useTagFilter'
+import { filterMedia, visibleSelection } from './mediaFilter'
 import { VideoTags, TagBatchDialog } from './VideoTags'
 import type { NamedTagVideo } from './VideoTags'
 import MediaThumbnail from './MediaThumbnail'
@@ -218,7 +221,7 @@ function App() {
   const [sortDirection, setSortDirection] = useState<SortDirection>(() => getPreference('framewise.sortDirection') === 'desc' ? 'desc' : 'asc')
   const [root, setRoot] = useState<string | null>(null)
   const [listing, setListing] = useState<DirectoryListing | null>(null)
-  const mediaEntries = useMemo(() => sortMedia(listing?.entries ?? [], mediaSort, sortDirection), [listing, mediaSort, sortDirection])
+  const sortedMediaEntries = useMemo(() => sortMedia(listing?.entries ?? [], mediaSort, sortDirection), [listing, mediaSort, sortDirection])
   const [selected, setSelected] = useState<FileEntry | null>(null)
   const [playbackRequest, setPlaybackRequest] = useState<{ path: string; action: 'play' | 'toggle' } | null>(null)
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
@@ -244,6 +247,8 @@ function App() {
   const [folderBusy, setFolderBusy] = useState(false)
   const [view, setView] = useState<'media' | 'settings'>('media')
   const [settingsTab, setSettingsTab] = useState<'settings' | 'tags'>('settings')
+  const tagFilter = useTagFilter(listing, root, tagRevision, view)
+  const mediaEntries = useMemo(() => filterMedia(sortedMediaEntries, tagFilter.active, tagFilter.matches), [sortedMediaEntries, tagFilter.active, tagFilter.matches])
   const [theme, setTheme] = useState<'light' | 'dark'>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
   const [defaultFolder, setDefaultFolder] = useState<string | null>(() => getPreference('framewise.defaultFolder'))
   const [settingsError, setSettingsError] = useState<string | null>(null)
@@ -314,15 +319,32 @@ function App() {
     return () => { active = false }
   }, [])
 
-  useEffect(() => {
-    if (view !== 'media' || !listing || !pendingFocus.current) return
+  const focusPendingFiles = useEffectEvent(() => {
+    if (view !== 'media' || !listing || !pendingFocus.current || !tagFilter.ready) return
     const rows = Array.from(fileListRef.current?.querySelectorAll<HTMLButtonElement>('[data-list-row]') ?? [])
     const target = pendingFocus.current.path
-      ? rows.find(row => row.dataset.path === pendingFocus.current?.path)
+      ? rows.find(row => row.dataset.path === pendingFocus.current?.path) ?? rows[0]
       : rows.find(row => row.dataset.entryIndex === '0') ?? rows[0]
     pendingFocus.current = null
     target?.focus()
-  }, [listing, view])
+    const entry = target ? mediaEntries[Number(target.dataset.entryIndex)] : null
+    if (entry && !entry.isDirectory && selected?.path !== entry.path) void selectFile(entry)
+  })
+
+  const reconcileFilteredSelection = useEffectEvent(() => {
+    if (!tagFilter.ready) return
+    const kept = visibleSelection(selectedPaths, mediaEntries)
+    if (kept.length !== selectedPaths.length) setSelectedPaths(kept)
+    if (selected && !mediaEntries.some(entry => entry.path === selected.path)) {
+      requestId.current++; setSelected(null); setProbe(null); setError(null); setLoading(false); setPlaybackRequest(null); setContextMenu(null)
+    }
+    if (selectionAnchor.current && !mediaEntries.some(entry => entry.path === selectionAnchor.current)) selectionAnchor.current = null
+  })
+  useEffect(() => {
+    // Reconcile selection before restoring focus to the newly rendered rows.
+    const frame = requestAnimationFrame(() => { reconcileFilteredSelection(); focusPendingFiles() })
+    return () => cancelAnimationFrame(frame)
+  }, [listing, view, mediaEntries, tagFilter.ready])
 
   useEffect(() => {
     if (!contextMenu) return
@@ -470,6 +492,11 @@ function App() {
     setPlaybackRequest(null)
     setView('settings')
   }
+  function openMedia() { setTagRevision(value => value + 1); setView('media') }
+  function changeTagFilters(ids: number[], matchAll: boolean) {
+    requestId.current++; setSelected(null); setSelectedPaths([]); setProbe(null); setError(null); setLoading(false); setPlaybackRequest(null); setContextMenu(null); selectionAnchor.current = null
+    tagFilter.change(ids, matchAll)
+  }
 
   async function browse(path: string, focusTarget?: { path?: string }) {
     try {
@@ -485,6 +512,7 @@ function App() {
   }
 
   function inspectFocusedVideo(directory: DirectoryListing, focusTarget: { path?: string }) {
+    if (tagFilter.active) return
     const entry = focusTarget.path
       ? directory.entries.find(item => item.path === focusTarget.path)
       : sortMedia(directory.entries, mediaSort, sortDirection)[0]
@@ -725,7 +753,7 @@ function App() {
       if (currentRequest !== requestId.current) return
       const next = result.listing
       const oldIndex = mediaEntries.findIndex(entry => entry.path === file.path)
-      const nextEntries = sortMedia(next.entries, mediaSort, sortDirection)
+      const nextEntries = filterMedia(sortMedia(next.entries, mediaSort, sortDirection), tagFilter.active, tagFilter.matches)
       const remaining = result.error ? nextEntries.filter(entry => paths.includes(entry.path)) : []
       const nearby = remaining[0] ?? nextEntries[Math.min(Math.max(oldIndex, 0), nextEntries.length - 1)]
       pendingFocus.current = nearby ? { path: nearby.path } : null
@@ -836,7 +864,8 @@ function App() {
   const audio = probe?.streams?.find(stream => stream.codec_type === 'audio')
   const pathParts = listing?.path.split(/[\\/]/).filter(Boolean) ?? []
   const directoryCount = listing?.entries.filter(entry => entry.isDirectory).length ?? 0
-  const videoCount = listing?.entries.length ? listing.entries.length - directoryCount : 0
+  const totalVideoCount = listing?.entries.length ? listing.entries.length - directoryCount : 0
+  const videoCount = mediaEntries.filter(entry => !entry.isDirectory).length
 
   if (editingFile) return <Editor file={editingFile} onExit={(result, replace) => { void finishEditing(result, replace) }} onSaved={result => { void savedEditing(result) }} />
 
@@ -854,8 +883,8 @@ function App() {
           <button className="panel-toggle workspace-toggle" onClick={toggleWorkspace} aria-label={workspaceCollapsed ? 'Expand workspace' : 'Collapse workspace'} aria-expanded={!workspaceCollapsed} title={workspaceCollapsed ? 'Expand workspace' : 'Collapse workspace'}><Icon name="chevron" size={17} /></button>
         </div>
         {workspaceCollapsed
-          ? <button className={`rail-icon media-rail ${view === 'media' ? 'active' : ''}`} onClick={() => setView('media')} title="Your media" aria-label="Your media"><Icon name="film" size={20} /></button>
-          : <button className={`sidebar-media ${view === 'media' ? 'active' : ''}`} onClick={() => setView('media')}><Icon name="film" size={18} /> Your media</button>}
+          ? <button className={`rail-icon media-rail ${view === 'media' ? 'active' : ''}`} onClick={openMedia} title="Your media" aria-label="Your media"><Icon name="film" size={20} /></button>
+          : <button className={`sidebar-media ${view === 'media' ? 'active' : ''}`} onClick={openMedia}><Icon name="film" size={18} /> Your media</button>}
         {workspaceCollapsed ? root && <button className="rail-icon" onClick={() => browse(root, {})} title="Go to selected folder" aria-label="Go to selected folder"><Icon name="folder" size={20} /></button> : root ? <>
           <button className="root-item" onClick={() => browse(root, {})} title={displayPath(root)}><Icon name="folder" size={19} /><span>{root.split(/[\\/]/).filter(Boolean).at(-1) || displayPath(root)}</span></button>
           <div className="sidebar-section-label">CURRENT FOLDER</div>
@@ -939,7 +968,8 @@ function App() {
           <div className="supported">MP4 · MOV · MKV · WebM · AVI and more</div>
         </div> : <>
           <div className="breadcrumb"><button onClick={() => root && browse(root, {})}>{root?.split(/[\\/]/).filter(Boolean).at(-1) || 'Root'}</button>{listing.path !== root && <><Icon name="chevron" size={14} /><span>{pathParts.at(-1)}</span></>}</div>
-          <div className="browser-toolbar"><span>{directoryCount} {directoryCount === 1 ? 'folder' : 'folders'} <span className="dot-separator">·</span> {videoCount} {videoCount === 1 ? 'video' : 'videos'}{selectedPaths.length > 1 && <> <span className="dot-separator">·</span> {selectedPaths.length} selected</>}</span><div className="browser-toolbar-actions"><button className="browser-new-folder" onClick={() => setCreatingFolder(true)} disabled={folderBusy || creatingFolder}>+ New folder</button><button title="Refresh folder" aria-label="Refresh folder" onClick={() => browse(listing.path, selected ? { path: selected.path } : {})}><Icon name="refresh" size={17} /></button></div></div>
+          <TagFilter filter={tagFilter} count={videoCount} total={totalVideoCount} onChange={changeTagFilters} />
+          <div className="browser-toolbar"><span>{directoryCount} {directoryCount === 1 ? 'folder' : 'folders'} <span className="dot-separator">·</span> {tagFilter.active && !tagFilter.ready ? 'Filtering videos…' : `${videoCount} ${videoCount === 1 ? 'video' : 'videos'}`}{selectedPaths.length > 1 && <> <span className="dot-separator">·</span> {selectedPaths.length} selected</>}</span><div className="browser-toolbar-actions"><button className="browser-new-folder" onClick={() => setCreatingFolder(true)} disabled={folderBusy || creatingFolder}>+ New folder</button><button title="Refresh folder" aria-label="Refresh folder" onClick={() => browse(listing.path, selected ? { path: selected.path } : {})}><Icon name="refresh" size={17} /></button></div></div>
           {creatingFolder && <form className="browser-create-folder" onSubmit={event => { event.preventDefault(); void createMediaFolder() }}><input autoFocus aria-label="New folder name" placeholder="New folder name" value={newFolderName} onChange={event => setNewFolderName(event.target.value)} disabled={folderBusy} /><button type="submit" disabled={folderBusy || !newFolderName.trim()}>{folderBusy ? 'Creating…' : 'Create'}</button><button type="button" onClick={() => { setCreatingFolder(false); setNewFolderName('') }} disabled={folderBusy}>Cancel</button></form>}
           {duplicatingFile && <div className="file-action progress" role="status">Duplicating “{duplicatingFile}”…</div>}
           {deleting && <div className="file-action progress" role="status">Moving to Trash…</div>}
@@ -961,7 +991,7 @@ function App() {
               <span className="file-kind">{entry.isDirectory ? 'Folder' : fileSize(entry.size)}</span>
               <Icon name="chevron" size={16} />
             </button>)}
-            {listing.entries.length === 0 && <div className="empty-list">No folders or supported video files here.</div>}
+            {tagFilter.active && tagFilter.ready && videoCount === 0 ? <div className="empty-list">{tagFilter.error ? 'Tag results are unavailable. Clear filters to browse all videos.' : 'No videos match these tags in this folder.'} <button className="clear-tag-empty" onClick={() => changeTagFilters([], tagFilter.matchAll)}>Clear filters</button></div> : listing.entries.length === 0 && <div className="empty-list">No folders or supported video files here.</div>}
             {(listing.parent || listing.entries.length > 0) && <div className="file-list-tip">Tip: Ctrl-click (⌘-click on Mac) or Shift-click to select several videos or folders. Right-click selected videos to edit their tags together. A normal click opens a folder.</div>}
           </div>
         </>}
@@ -974,7 +1004,7 @@ function App() {
           <div className="details-actions">{!inspectorCollapsed && probe && <button className="icon-button" onClick={copyMetadata} title="Copy raw metadata" aria-label="Copy raw metadata"><Icon name={copyDone ? 'check' : 'copy'} size={17} /></button>}
           <button className="panel-toggle inspector-toggle" onClick={toggleInspector} aria-label={inspectorCollapsed ? 'Expand inspector' : 'Collapse inspector'} aria-expanded={!inspectorCollapsed} title={inspectorCollapsed ? 'Expand inspector' : 'Collapse inspector'}><Icon name="chevron" size={17} /></button></div>
         </div>
-        {!inspectorCollapsed && (selected ? <div key={selected.path} className="details-body">
+        {!inspectorCollapsed && (selected && (!tagFilter.active || tagFilter.ready && mediaEntries.some(entry => entry.path === selected.path)) ? <div key={selected.path} className="details-body">
           <VideoPreview file={selected} playbackAction={playbackRequest?.path === selected.path ? playbackRequest.action : null} onPlayRequestHandled={() => setPlaybackRequest(null)} />
           <div className="selected-file"><span className="selected-file-icon"><Icon name="film" size={27} /></span><div><strong title={selected.name}>{selected.name}</strong><span>{fileSize(selected.size)}</span></div></div>
           {probe && video && <button className="inspector-edit" onClick={() => editFile(selected)}>Edit video</button>}

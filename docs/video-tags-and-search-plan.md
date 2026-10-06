@@ -254,7 +254,25 @@ Checkpoint:
 
 ### Phase 5 — Tag filtering in the current folder
 
-Status: Pending. Depends on Phase 4.
+Status: Complete. Automated checks pass; user tested and approved.
+
+Implemented:
+
+- Current-folder tag selection, removable active chips, Match all / Match any, result count, and Clear filters.
+- Database queries use stable video and tag IDs and exclude inactive catalog records.
+- List/Grid rendering, sorting, keyboard navigation, range selection, and context actions share the filtered sequence. Folders and parent navigation remain available.
+- Hidden selections and Inspector content are cleared. Stale asynchronous filter results are discarded; query failures show an error rather than unfiltered videos.
+- Filters remain active while browsing the same workspace, reset on workspace changes, and refresh after assignments or returning from tag settings.
+- Frontend tests cover preserved folders, uncatalogued videos, cleared hidden selections, and filtered keyboard order. Backend tests cover all/any, duplicate IDs, no filters/no matches, folder boundaries, assignment changes, renamed/deleted tags, and missing/trashed records.
+- Checks: frontend build, lint and tests; 49 Rust tests.
+
+Manual checkpoint:
+
+1. Assign two tags to overlapping video sets. Select both filters and compare Match all with Match any; check the result count and remove individual chips.
+2. Try List and Grid, sorting, grid sizes, arrow keys, Enter, Shift selection, and context actions on the results.
+3. Browse a subfolder and back with filters active, including a folder with no matches. Folders remain visible; Clear filters restores all videos.
+4. Remove a matching tag from a selected video, including through batch editing. A video that no longer matches disappears and its Inspector clears.
+5. Rename/delete an active tag in Settings, then return to Your media. Filters update. Switch workspace and back; old filters must not return.
 
 Work:
 

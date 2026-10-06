@@ -6,6 +6,31 @@ use crate::database::{normalize_tag_name, tag_search_key, with_connection};
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Tag { id: i64, name: String, video_count: i64 }
 
+fn filter_folder_on(connection: &mut Connection, folder: &std::path::Path, tag_ids: &[i64], match_all: bool) -> Result<Vec<i64>, String> {
+    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    transaction.execute_batch("CREATE TEMP TABLE IF NOT EXISTS framewise_filter_tags(tag_id INTEGER PRIMARY KEY); DELETE FROM framewise_filter_tags;").map_err(|error| error.to_string())?;
+    for id in tag_ids { transaction.execute("INSERT OR IGNORE INTO framewise_filter_tags VALUES (?1)", [id]).map_err(|error| error.to_string())?; }
+    let count: i64 = transaction.query_row("SELECT COUNT(*) FROM framewise_filter_tags", [], |row| row.get(0)).map_err(|error| error.to_string())?;
+    let ids = {
+        let mut statement = transaction.prepare("SELECT v.id FROM videos v WHERE v.parent_path=?1 AND v.status='active' AND
+            (?2=0 OR (?3 AND (SELECT COUNT(*) FROM video_tags vt JOIN framewise_filter_tags f ON f.tag_id=vt.tag_id WHERE vt.video_id=v.id)=?2)
+             OR (NOT ?3 AND EXISTS(SELECT 1 FROM video_tags vt JOIN framewise_filter_tags f ON f.tag_id=vt.tag_id WHERE vt.video_id=v.id))) ORDER BY v.id").map_err(|error| error.to_string())?;
+        statement.query_map(params![folder.to_string_lossy(), count, match_all], |row| row.get::<_, i64>(0))
+            .map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?
+    };
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(ids)
+}
+#[tauri::command]
+pub(crate) async fn filter_folder_videos(path: String, tag_ids: Vec<i64>, match_all: bool, state: tauri::State<'_, crate::AppState>) -> Result<Vec<i64>, String> {
+    let folder = crate::within_root(&path, &state)?;
+    if !folder.is_dir() { return Err("Choose a folder to filter.".into()); }
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::catalog_operations::recover_pending()?;
+        with_connection(|connection| filter_folder_on(connection, &folder, &tag_ids, match_all))
+    }).await.map_err(|error| error.to_string())?
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TagVideo { video_id: i64, path: String }
@@ -210,6 +235,39 @@ mod tests {
         TagVideo { video_id: id, path: video.path }
     }
     fn assigned(result: &TagSelection, name: &str) -> i64 { result.tags.iter().find(|tag| tag.name == name).unwrap().assigned_count }
+
+    #[test]
+    fn folder_filters_match_all_any_and_live_assignments() {
+        let fixture = Fixture::new();
+        let mut connection = open_at(&fixture.path).unwrap();
+        let root = fixture.folder.canonicalize().unwrap();
+        let first = seed_video(&connection, &fixture, "first.mp4");
+        let second = seed_video(&connection, &fixture, "second.mp4");
+        let untagged = seed_video(&connection, &fixture, "untagged.mp4");
+        create_on(&connection, "Travel").unwrap();
+        create_on(&connection, "Favorite").unwrap();
+        let travel = list_on(&connection, "travel").unwrap()[0].id;
+        let favorite = list_on(&connection, "favorite").unwrap()[0].id;
+        connection.execute("INSERT INTO video_tags VALUES (?1,?2)", params![first.video_id, travel]).unwrap();
+        connection.execute("INSERT INTO video_tags VALUES (?1,?2)", params![first.video_id, favorite]).unwrap();
+        connection.execute("INSERT INTO video_tags VALUES (?1,?2)", params![second.video_id, travel]).unwrap();
+        assert_eq!(filter_folder_on(&mut connection, &root, &[], true).unwrap(), vec![first.video_id, second.video_id, untagged.video_id]);
+        assert_eq!(filter_folder_on(&mut connection, &root, &[travel, favorite], true).unwrap(), vec![first.video_id]);
+        assert_eq!(filter_folder_on(&mut connection, &root, &[travel, favorite], false).unwrap(), vec![first.video_id, second.video_id]);
+        assert_eq!(filter_folder_on(&mut connection, &root, &[travel, travel], true).unwrap(), vec![first.video_id, second.video_id]);
+        assert!(filter_folder_on(&mut connection, &root.join("subfolder"), &[travel], false).unwrap().is_empty());
+        assert!(filter_folder_on(&mut connection, &root, &[999], false).unwrap().is_empty());
+        rename_on(&connection, travel, "Trips").unwrap();
+        assert_eq!(filter_folder_on(&mut connection, &root, &[travel], true).unwrap(), vec![first.video_id, second.video_id]);
+        connection.execute("DELETE FROM video_tags WHERE video_id=?1 AND tag_id=?2", params![second.video_id, travel]).unwrap();
+        assert_eq!(filter_folder_on(&mut connection, &root, &[travel], false).unwrap(), vec![first.video_id]);
+        connection.execute("UPDATE videos SET status='missing' WHERE id=?1", [first.video_id]).unwrap();
+        assert!(filter_folder_on(&mut connection, &root, &[travel], false).unwrap().is_empty());
+        connection.execute("UPDATE videos SET status='trashed' WHERE id=?1", [second.video_id]).unwrap();
+        assert_eq!(filter_folder_on(&mut connection, &root, &[], false).unwrap(), vec![untagged.video_id]);
+        delete_on(&mut connection, favorite, "Favorite", 1).unwrap();
+        assert!(filter_folder_on(&mut connection, &root, &[favorite], true).unwrap().is_empty());
+    }
 
     #[test]
     fn single_batch_and_partial_assignments_are_idempotent_and_scoped() {
