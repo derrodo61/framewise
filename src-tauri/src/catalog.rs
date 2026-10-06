@@ -1,11 +1,62 @@
 use std::{collections::{HashMap, HashSet}, path::Path, time::{SystemTime, UNIX_EPOCH}};
 use rusqlite::{Connection, OptionalExtension, params};
 
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ObservedVideo {
     pub path: String,
     pub name: String,
     pub size: u64,
     pub modified_ns: String,
+}
+
+pub(crate) fn observe(path: &Path) -> Result<ObservedVideo, String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| format!("Cannot read {}: {error}", path.display()))?;
+    if !metadata.is_file() { return Err("Catalog operations require a regular video file.".into()); }
+    let path = path.canonicalize().map_err(|error| error.to_string())?;
+    Ok(ObservedVideo {
+        path: path.to_string_lossy().into_owned(),
+        name: path.file_name().ok_or("Cannot read filename")?.to_string_lossy().into_owned(),
+        size: metadata.len(),
+        modified_ns: metadata.modified().map_err(|error| error.to_string())?.duration_since(UNIX_EPOCH).map_err(|error| error.to_string())?.as_nanos().to_string(),
+    })
+}
+
+pub(crate) fn content_hash(path: &Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let before = observe(path)?;
+    let mut input = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut hash = Sha256::new();
+    let mut buffer = [0u8; 65_536];
+    loop { let count = input.read(&mut buffer).map_err(|error| error.to_string())?; if count == 0 { break } hash.update(&buffer[..count]); }
+    if observe(path)? != before { return Err("Video changed while checking its content identity.".into()); }
+    Ok(hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+pub(crate) fn ensure_observed_on(connection: &Connection, video: &ObservedVideo) -> Result<i64, String> {
+    let size = i64::try_from(video.size).map_err(|error| error.to_string())?;
+    let known: Option<(i64, i64, String)> = connection.query_row("SELECT id,size,modified_ns FROM videos WHERE path=?1 AND status='active'", [&video.path], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .optional().map_err(|error| error.to_string())?;
+    if let Some((id, old_size, modified)) = &known
+        && *old_size == size && modified == &video.modified_ns { return Ok(*id); }
+    if let Some((id, _, _)) = known { connection.execute("UPDATE videos SET status='changed' WHERE id=?1", [id]).map_err(|error| error.to_string())?; }
+    let candidates = {
+        let mut statement = connection.prepare("SELECT id,content_hash FROM videos WHERE path=?1 AND size=?2 AND status='trashed' AND content_hash IS NOT NULL").map_err(|error| error.to_string())?;
+        statement.query_map(params![video.path, size], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
+            .map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?
+    };
+    if !candidates.is_empty() {
+        let hash = content_hash(Path::new(&video.path))?;
+        let matches: Vec<_> = candidates.iter().filter(|(_, candidate)| *candidate == hash).collect();
+        if matches.len() == 1 {
+            let id = matches[0].0;
+            connection.execute("UPDATE videos SET status='active',modified_ns=?1,last_seen_at=unixepoch()*1000 WHERE id=?2", params![video.modified_ns, id]).map_err(|error| error.to_string())?;
+            return Ok(id);
+        }
+    }
+    let parent = Path::new(&video.path).parent().ok_or("Cannot read parent folder")?.to_string_lossy();
+    connection.execute("INSERT INTO videos(path,parent_path,name,size,modified_ns,status,last_seen_at) VALUES (?1,?2,?3,?4,?5,'active',unixepoch()*1000)", params![video.path, parent, video.name, size, video.modified_ns]).map_err(|error| error.to_string())?;
+    Ok(connection.last_insert_rowid())
 }
 
 pub(crate) fn register_folder(folder: &Path, present_paths: &[String], observed: &[ObservedVideo]) -> Result<HashMap<String, i64>, String> {
@@ -24,26 +75,8 @@ fn register_folder_on(connection: &mut Connection, folder: &Path, present_paths:
     let transaction = connection.transaction().map_err(|error| error.to_string())?;
     let mut ids = HashMap::new();
     for video in observed {
-        let size = i64::try_from(video.size).map_err(|_| "Video size is too large for the catalog")?;
-        let known: Option<(i64, i64, String)> = transaction.query_row(
-            "SELECT id, size, modified_ns FROM videos WHERE path=?1 AND status='active'", [&video.path],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        ).optional().map_err(|error| error.to_string())?;
-        let id = match known {
-            Some((id, old_size, old_modified)) if old_size == size && old_modified == video.modified_ns => {
-                transaction.execute("UPDATE videos SET last_seen_at=?1, name=?2 WHERE id=?3", params![now, video.name, id]).map_err(|error| error.to_string())?;
-                id
-            }
-            other => {
-                if let Some((id, _, _)) = other {
-                    transaction.execute("UPDATE videos SET status='changed' WHERE id=?1", [id]).map_err(|error| error.to_string())?;
-                }
-                // Retained history is never automatically assigned to a replacement file.
-                transaction.execute("INSERT INTO videos(path,parent_path,name,size,modified_ns,status,last_seen_at) VALUES (?1,?2,?3,?4,?5,'active',?6)",
-                    params![video.path, parent, video.name, size, video.modified_ns, now]).map_err(|error| error.to_string())?;
-                transaction.last_insert_rowid()
-            }
-        };
+        let id = ensure_observed_on(&transaction, video)?;
+        transaction.execute("UPDATE videos SET last_seen_at=?1, name=?2 WHERE id=?3", params![now, video.name, id]).map_err(|error| error.to_string())?;
         ids.insert(video.path.clone(), id);
     }
     let active = {

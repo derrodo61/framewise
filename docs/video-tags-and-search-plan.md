@@ -116,7 +116,36 @@ Checkpoint:
 
 ### Phase 2 — File-operation identity and tag preservation
 
-Status: Pending. Depends on Phase 1.
+Status: Complete. Automated checks passed; the user completed the manual checklist and reported no problems. Depends on Phase 1.
+
+Implementation decisions:
+
+- Moves and renames retain IDs and assignments, including supported videos discovered recursively inside moved/renamed folders. Source records are prepared before filesystem changes.
+- Save updates the original record's file version and retains its ID. Duplicate and Save As explicitly create separate records and copy the source's assignments. File-operation response listings now register catalog IDs.
+- Trash retains IDs and assignments with `trashed` status; partial batch failures update only videos actually absent afterward. Existing preview relocation/cleanup remains in place.
+- Tagged videos receive a SHA-256 content identity before Trash. A file restored at its old path reuses a trashed record only when its size and content hash uniquely match. An unrelated replacement or multiple matching historical records receives a new ID. Untagged videos are not read for hashing during deletion; external moves and general missing-file reconciliation remain deferred.
+- The catalog schema is now version 3: operation receipts and optional content hashes are additive migrations. SQLite `user_version` and the preview schema remain unchanged. Existing databases receive a consistent `framewise-before-catalog-v3-<timestamp>.db` snapshot before upgrading.
+- `~/.framewise/catalog-operations` holds flushed preparation/completion JSON journals. Completed filesystem operations can replay catalog transactions after restart; receipts make replay idempotent. Successful or safely canceled operations remove their journals.
+- Operations with overlapping source/destination paths are rejected while another operation is using them. Preparation captures filenames, sizes, and modification times without ffprobe or thumbnail generation.
+- If filesystem work succeeds but catalog persistence fails, the app reports pending recovery rather than ordinary success. Ambiguous interruptions and destinations changed before recovery retain the journal and original assignments for manual review; they are not guessed from size/time. Catalog discovery is deferred in that situation and the browser shows a warning. No journal-review UI is included yet.
+- Tag assignments in these tests are seeded into temporary databases. Tag management/assignment controls still arrive in Phases 3 and 4.
+
+Validation:
+
+- Tests cover nested folder moves, video renames, batch moves including changed timestamps after copy/remove transfers, separate Duplicate/Save As records, Save identity, partial Trash, restored tagged content, same-size unrelated replacements, canceled collisions, overlapping operations, database transaction failure, idempotent restart recovery, ambiguous interruption, and changed destinations.
+- Schema-upgrade tests preserve Phase 1 IDs, assignments, and previews and verify the pre-upgrade snapshot.
+- All 42 Rust tests passed, including the existing preview lifecycle, filesystem operations, and real FFmpeg export tests. Frontend build/lint/tests and Rust clippy passed.
+- No installer or version bump was created. Actual multi-drive and Mac/Linux manual checks have not been performed in this phase.
+- The user completed the Windows development-mode manual checklist for Duplicate, rename/move, folder operations, Save/Save As, Trash/cancel/restore, collisions, restarting, and previews, and reported no problems. Tag preservation remains verified through backend tests until the tag controls are implemented.
+
+Manual checkpoint (use copies of test videos):
+
+1. Duplicate a video, rename the duplicate, move it, and restart. Confirm the file list, metadata, and previews still work.
+2. Rename and move a folder containing nested videos. Browse those videos afterward and after restarting.
+3. Edit a test video and try both Save As and Save. Confirm output playback, metadata, and preview refresh.
+4. Cancel a Trash dialog, then Trash one or several test copies. Verify the remaining list and restore a copy through the system Trash/Recycle Bin to check browsing again.
+5. Attempt a move/rename into an existing name; verify it fails without moving anything unexpectedly.
+6. Confirm previously cached previews remain responsive. Tag identity preservation is covered by backend tests until the tag UI exists.
 
 Work:
 

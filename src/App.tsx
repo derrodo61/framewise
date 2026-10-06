@@ -26,7 +26,7 @@ import './file-actions.css'
 import './media-view.css'
 
 type FileEntry = { name: string; path: string; isDirectory: boolean; size: number | null; modifiedAt: number | null; videoId?: number | null }
-type DirectoryListing = { path: string; parent: string | null; entries: FileEntry[] }
+type DirectoryListing = { path: string; parent: string | null; entries: FileEntry[]; catalogWarning?: string }
 type TrashBatchResult = { listing: DirectoryListing; movedCount: number; error: string | null }
 type DuplicateResult = { listing: DirectoryListing; duplicatedPath: string }
 type RenameResult = { listing: DirectoryListing; renamedPath: string }
@@ -901,6 +901,7 @@ function App() {
           {duplicatingFile && <div className="file-action progress" role="status">Duplicating “{duplicatingFile}”…</div>}
           {deleting && <div className="file-action progress" role="status">Moving to Trash…</div>}
           {fileAction && <div className={`file-action ${fileAction.error ? 'error' : ''}`} role={fileAction.error ? 'alert' : 'status'}>{fileAction.message}</div>}
+          {listing.catalogWarning && <div className="file-action error" role="alert">{listing.catalogWarning}</div>}
           <div className="media-view-switch" role="group" aria-label="File view">
             <label className="media-sort">Sort by <select value={mediaSort} onChange={event => { const value = event.target.value as MediaSort; setMediaSort(value); setPreference('framewise.mediaSort', value) }}><option value="name">Filename</option><option value="modified">Date modified</option></select></label>
             <label className="media-sort"><span className="sort-order-label">Order</span><select aria-label="Sort order" value={sortDirection} onChange={event => { const value = event.target.value as SortDirection; setSortDirection(value); setPreference('framewise.sortDirection', value) }}><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>

@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{AppState, DirectoryListing, list_folder, selected_root, video_file, within_root};
+use crate::{AppState, DirectoryListing, selected_root, video_file, within_root};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -14,7 +14,7 @@ pub(crate) struct DuplicateResult {
     duplicated_path: String,
 }
 
-fn duplicate_file(source: &Path) -> Result<PathBuf, String> {
+fn duplicate_file_with(source: &Path, mut before_copy: impl FnMut(&Path) -> Result<(), String>) -> Result<PathBuf, String> {
     let stem = source
         .file_stem()
         .and_then(|part| part.to_str())
@@ -51,6 +51,11 @@ fn duplicate_file(source: &Path) -> Result<PathBuf, String> {
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(format!("Cannot create duplicate: {error}")),
         };
+        if let Err(error) = before_copy(&destination) {
+            drop(output);
+            fs::remove_file(&destination).map_err(|cleanup| format!("{error}. Could not remove the reserved empty duplicate: {cleanup}"))?;
+            return Err(error);
+        }
         let copied = io::copy(&mut input, &mut output).and_then(|bytes| {
             output.flush()?;
             output.sync_all()?;
@@ -97,10 +102,16 @@ pub(crate) async fn duplicate_video(
         return Err("Select a supported video file".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let duplicate = duplicate_file(&source)?;
+        let mut operation = None;
+        let result = duplicate_file_with(&source, |target| {
+            operation = Some(crate::catalog_operations::Operation::begin_reserved_copy(source.clone(), target.to_path_buf())?);
+            Ok(())
+        });
+        let duplicate = match result { Ok(path) => path, Err(error) => { if let Some(operation) = operation { operation.cancel_if_unchanged(); } return Err(error); } };
+        operation.ok_or("Missing duplicate catalog operation")?.finish()?;
         let folder = source.parent().ok_or("Cannot find the video's folder")?;
         Ok(DuplicateResult {
-            listing: list_folder(folder, &root)?,
+            listing: crate::catalogued_folder(folder, &root)?,
             duplicated_path: duplicate.to_string_lossy().into_owned(),
         })
     })
@@ -110,7 +121,7 @@ pub(crate) async fn duplicate_video(
 
 #[cfg(test)]
 mod tests {
-    use super::duplicate_file;
+    fn duplicate_file(source: &std::path::Path) -> Result<std::path::PathBuf, String> { super::duplicate_file_with(source, |_| Ok(())) }
     use std::{
         fs,
         time::{SystemTime, UNIX_EPOCH},

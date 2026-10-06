@@ -183,7 +183,7 @@ pub(crate) fn create_media_folder(
     let parent = within_root(&parent, &state)?;
     let folder = create_folder(&parent, &name)?;
     Ok(CreatedFolder {
-        listing: list_folder(&parent, &root)?,
+        listing: crate::catalogued_folder(&parent, &root)?,
         created_path: folder.to_string_lossy().into_owned(),
     })
 }
@@ -410,13 +410,16 @@ pub(crate) async fn move_selected(
             }
         }
         let legacy_names: Vec<_> = session.sources.iter().map(|source| if session.directories { None } else { thumbnail_name(source) }).collect();
-        move_paths(&session.sources, &destination)?;
+        let targets = session.sources.iter().map(|source| source.file_name().map(|name| destination.join(name))).collect();
+        let operation = crate::catalog_operations::Operation::begin(crate::catalog_operations::Action::Move, session.sources.clone(), targets)?;
+        if let Err(error) = move_paths(&session.sources, &destination) { operation.cancel_if_unchanged(); return Err(error); }
         for (source, legacy_name) in session.sources.iter().zip(legacy_names) {
             if let Some(file_name) = source.file_name() {
                 if session.directories { relocate_folder_previews(source, &destination.join(file_name)); }
                 else { relocate_video_preview(source, &destination.join(file_name), legacy_name.as_deref()); }
             }
         }
+        operation.finish()?;
         let result = MoveResult {
             count: session.sources.len(),
             source_folder: session.source_folder.to_string_lossy().into_owned(),

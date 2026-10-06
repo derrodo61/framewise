@@ -53,13 +53,14 @@ fn catalog_version(connection: &Connection) -> Result<i64, String> {
 
 fn migrate_catalog(connection: &mut Connection, path: &Path, backup_existing: bool) -> Result<(), String> {
     match catalog_version(connection)? {
-        1 => return Ok(()),
+        3 => return Ok(()),
+        1 | 2 => {},
         0 => {},
         version => return Err(format!("Unsupported Framewise catalog version: {version}")),
     }
     if backup_existing {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|error| error.to_string())?.as_nanos();
-        let backup = path.with_file_name(format!("framewise-before-catalog-v1-{stamp}.db"));
+        let backup = path.with_file_name(format!("framewise-before-catalog-v3-{stamp}.db"));
         // SQLite makes a consistent snapshot including committed WAL contents.
         connection.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])
             .map_err(|error| format!("Cannot back up database before migration: {error}"))?;
@@ -70,7 +71,7 @@ fn migrate_catalog(connection: &mut Connection, path: &Path, backup_existing: bo
     let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|error| error.to_string())?;
     // Another Framewise process might have completed the migration while we backed up.
     let version = catalog_version(&transaction)?;
-    if version != 0 && version != 1 { return Err(format!("Unsupported Framewise catalog version: {version}")); }
+    if !(0..=3).contains(&version) { return Err(format!("Unsupported Framewise catalog version: {version}")); }
     if version == 0 {
         transaction.execute_batch("CREATE TABLE catalog_schema (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL);
             INSERT INTO catalog_schema VALUES (1, 1);
@@ -108,6 +109,14 @@ fn migrate_catalog(connection: &mut Connection, path: &Path, backup_existing: bo
             );
             CREATE INDEX workspace_scans_by_workspace ON workspace_scans(workspace_path, id);")
             .map_err(|error| format!("Cannot migrate video catalog: {error}"))?;
+    }
+    if version < 2 {
+        transaction.execute_batch("CREATE TABLE catalog_operation_receipts (operation_id TEXT PRIMARY KEY, completed_at INTEGER NOT NULL);
+            UPDATE catalog_schema SET version=2 WHERE id=1;").map_err(|error| format!("Cannot migrate catalog operations: {error}"))?;
+    }
+    if version < 3 {
+        transaction.execute_batch("ALTER TABLE videos ADD COLUMN content_hash TEXT;
+            UPDATE catalog_schema SET version=3 WHERE id=1;").map_err(|error| format!("Cannot migrate restored-video identity: {error}"))?;
     }
     transaction.commit().map_err(|error| format!("Cannot commit catalog migration: {error}"))
 }
@@ -153,7 +162,7 @@ pub(crate) mod tests {
         // Keep the legacy connection open: the snapshot must include committed WAL data.
         let connection = open_at(&fixture.path).unwrap();
         assert_eq!(connection.query_row("SELECT image_name FROM previews WHERE video_path='clip.mp4'", [], |row| row.get::<_, String>(0)).unwrap(), "cached.png");
-        assert_eq!(catalog_version(&connection).unwrap(), 1);
+        assert_eq!(catalog_version(&connection).unwrap(), 3);
         let backups = fixture.backups();
         assert_eq!(backups.len(), 1);
         let backup = Connection::open(&backups[0]).unwrap();
@@ -201,5 +210,27 @@ pub(crate) mod tests {
         assert!(connection.execute("INSERT INTO tags(name,normalized_name) VALUES (?1,'other')", ["\u{a0}Other\u{a0}"]).is_err());
         assert!(connection.execute("INSERT INTO video_tags(video_id,tag_id) VALUES (999,1)", []).is_err());
         assert_eq!(connection.pragma_query_value(None, "foreign_keys", |row| row.get::<_, i64>(0)).unwrap(), 1);
+    }
+
+    #[test]
+    fn phase_one_catalog_upgrade_retains_ids_tags_and_previews() {
+        let fixture = Fixture::new();
+        let connection = open_at(&fixture.path).unwrap();
+        connection.execute_batch("INSERT INTO previews VALUES ('clip.mp4','v1','cached.png');
+            INSERT INTO videos(id,path,parent_path,name,size,modified_ns,status,last_seen_at) VALUES (7,'clip.mp4','.','clip.mp4',100,'123','active',1);
+            INSERT INTO tags(id,name,normalized_name) VALUES (5,'Keeper','keeper');
+            INSERT INTO video_tags VALUES (7,5);
+            DROP TABLE catalog_operation_receipts;
+            ALTER TABLE videos DROP COLUMN content_hash;
+            UPDATE catalog_schema SET version=1;").unwrap();
+        drop(connection);
+        let upgraded = open_at(&fixture.path).unwrap();
+        assert_eq!(catalog_version(&upgraded).unwrap(), 3);
+        assert_eq!(upgraded.query_row("SELECT video_id FROM video_tags WHERE tag_id=5", [], |row| row.get::<_, i64>(0)).unwrap(), 7);
+        assert_eq!(upgraded.query_row("SELECT image_name FROM previews", [], |row| row.get::<_, String>(0)).unwrap(), "cached.png");
+        assert_eq!(fixture.backups().len(), 1);
+        let backup = Connection::open(&fixture.backups()[0]).unwrap();
+        assert_eq!(catalog_version(&backup).unwrap(), 1);
+        assert_eq!(backup.query_row("SELECT video_id FROM video_tags", [], |row| row.get::<_, i64>(0)).unwrap(), 7);
     }
 }
