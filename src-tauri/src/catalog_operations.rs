@@ -17,6 +17,12 @@ pub(crate) struct Operation { directory: PathBuf, plan: Plan }
 
 fn live() -> &'static Mutex<HashMap<String, Vec<PathBuf>>> { static LIVE: OnceLock<Mutex<HashMap<String, Vec<PathBuf>>>> = OnceLock::new(); LIVE.get_or_init(|| Mutex::new(HashMap::new())) }
 fn journal_directory() -> Result<PathBuf, String> { Ok(crate::preferences::settings_dir()?.join("catalog-operations")) }
+pub(crate) fn ensure_paths_idle(paths: &[PathBuf]) -> Result<(), String> {
+    if live().lock().map_err(|_| "Catalog operation state unavailable")?.values().flatten().any(|busy| paths.iter().any(|path| busy.starts_with(path) || path.starts_with(busy))) {
+        return Err("A file operation is using one of these videos. Wait for it to finish.".into());
+    }
+    Ok(())
+}
 fn journal_path(directory: &Path, id: &str, stage: &str) -> PathBuf { directory.join(format!("{id}.{stage}.json")) }
 fn write_journal<T: Serialize>(directory: &Path, id: &str, stage: &str, value: &T) -> Result<(), String> {
     fs::create_dir_all(directory).map_err(|error| error.to_string())?;

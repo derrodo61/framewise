@@ -164,7 +164,7 @@ Checkpoint:
 
 ### Phase 3 — Manage tags
 
-Status: Core functionality tested by the user with no problems reported. Settings/Tags tab refinement implemented; manual layout checkpoint pending. Depends on Phase 1.
+Status: Complete. Core functionality tested by the user with no problems reported; the user accepted the tabbed revision for commit and authorized Phase 4. A separate manual report on the tab refinement was not provided. Depends on Phase 1.
 
 Implementation decisions:
 
@@ -207,7 +207,35 @@ Checkpoint:
 
 ### Phase 4 — Single and batch tag assignment
 
-Status: Pending. Depends on Phases 2 and 3.
+Status: Complete. Automated checks passed; the user tested the feature and reported it works perfectly. Depends on Phases 2 and 3.
+
+Implementation decisions:
+
+- The Inspector has a Tags section for the displayed video, independent of ffprobe success. It shows assigned tags, removal buttons, an existing-tag picker, and a create-and-add field. Its helper text explicitly limits these actions to the displayed video even when several list items are selected.
+- List and Grid context menus offer Edit tags for the selected videos. The modal freezes the selected IDs/paths and lists filenames. It shows All versus Some assignment counts, Add to all for partial tags, and Remove from all. Changes are saved immediately; Close/Done and Escape exit after pending writes finish.
+- Creating while assigning is atomic. A Unicode-equivalent existing name reuses the existing tag rather than creating a duplicate or changing its display spelling.
+- Backend commands validate each video's active catalog ID, canonical path, workspace membership, size, and nanosecond modification time before any assignment changes. Missing, moved, changed, unknown, unsupported, and directory targets are rejected. Duplicate targets are deduplicated and partial validation failures roll back the entire batch.
+- Pending catalog recovery is checked before tag operations, and videos involved in live file operations cannot be tagged until those operations finish. Add is idempotent; removal affects only the selected video/tag pairs.
+- Selection loads and writes use transactions and return aggregate assignment counts. New selection scopes mount separate editors; stale asynchronous reads cannot replace a newer result. Batch changes refresh the Inspector, and returning to Settings reloads global tag counts/names.
+- The batch dialog traps keyboard focus using the native modal dialog and restores focus to the clicked video on close. Tag inputs do not trigger file-list Enter/Delete shortcuts.
+- No migration, version bump, or installer was needed. Video files and their embedded metadata are not modified by assigning tags.
+
+Validation:
+
+- Backend tests cover single and batch add/remove, partial/all counts, idempotency, unrelated assignment preservation, duplicate targets, Unicode create-and-reuse, persistence, tag rename/delete propagation, stale versions, missing videos, wrong IDs, folders, out-of-workspace paths, unknown tags, and batch rollback.
+- All 48 Rust tests pass, including existing operation-recovery and FFmpeg tests. Frontend build, lint, tests, and Rust clippy pass.
+- The user tested the implemented tag-assignment feature and reported no problems.
+
+Manual checkpoint:
+
+1. Select a test video and add an existing tag in the Inspector. Create another tag there, remove one, and check the remaining tag stays.
+2. Give two videos different tags. Ctrl/Command-click or Shift-click both, right-click one, and choose Edit tags. Verify Some versus All counts.
+3. Add a partial tag to all, then remove another tag from all. Close the dialog and inspect each video separately. A third, unselected video's tags must remain unchanged.
+4. Reuse an existing name in the create-and-add field, including a different letter case. Confirm there is only one global tag in Settings → Tags.
+5. Restart and verify assignments. Rename a tag in Settings and confirm the Inspector uses its new name; delete a test tag and confirm assignments disappear while videos remain.
+6. Try tagging in both List and Grid, with keyboard selection. Folders should not offer Edit tags. Change the displayed video while a single-video tag operation is pending; the new video must not show the previous video's result.
+7. Now that tags are visible, optionally repeat Phase 2 checks on tagged copies: rename/move, Duplicate, Save As, Save, and Trash/restore. Check that IDs/assignments follow the documented rules.
+8. Confirm Inspector playback, Enter play/pause, and prompt copying still work alongside the tag controls. Tag filtering arrives in Phase 5.
 
 Work:
 

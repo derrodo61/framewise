@@ -178,8 +178,10 @@ fn overlapping_live_operations_are_rejected() {
     let source = fixture.folder.join("clip.mp4");
     seed(&mut connection, &source);
     let operation = start(&mut connection, &fixture, Action::Copy, vec![source.clone()], vec![Some(fixture.folder.join("copy.mp4"))]);
+    assert!(ensure_paths_idle(std::slice::from_ref(&source)).is_err());
     assert!(Operation::begin_on(&mut connection, fixture.folder.join("journal"), Action::Trash, vec![source], vec![None], false).is_err());
     operation.cancel_if_unchanged();
+    assert!(ensure_paths_idle(&operation.plan.sources).is_ok());
 }
 
 #[test]

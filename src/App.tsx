@@ -9,6 +9,8 @@ import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import Editor from './Editor'
 import GenerationPrompt from './GenerationPrompt'
 import TagSettings from './TagSettings'
+import { VideoTags, TagBatchDialog } from './VideoTags'
+import type { NamedTagVideo } from './VideoTags'
 import MediaThumbnail from './MediaThumbnail'
 import { generateThumbnail } from './thumbnailQueue'
 import { nextMediaIndex } from './mediaNavigation'
@@ -226,6 +228,9 @@ function App() {
   const [copyDone, setCopyDone] = useState(false)
   const [editingFile, setEditingFile] = useState<FileEntry | null>(null)
   const [contextMenu, setContextMenu] = useState<{ file: FileEntry; x: number; y: number } | null>(null)
+  const [tagBatch, setTagBatch] = useState<NamedTagVideo[] | null>(null)
+  const [tagRevision, setTagRevision] = useState(0)
+  const tagReturnPath = useRef<string | null>(null)
   const [fileAction, setFileAction] = useState<{ message: string; error: boolean } | null>(null)
   const [deleting, setDeleting] = useState(false)
   const trashRequestPending = useRef(false)
@@ -547,7 +552,23 @@ function App() {
   function openFileMenu(file: FileEntry, x: number, y: number) {
     if (deleting || duplicatingFile || renaming || renameTarget) return
     if (!selectedPaths.includes(file.path)) { selectionAnchor.current = file.path; inspectSelection(file) }
-    setContextMenu({ file, x: Math.max(8, Math.min(x, window.innerWidth - 200)), y: Math.max(8, Math.min(y, window.innerHeight - (file.isDirectory ? 180 : 255))) })
+    setContextMenu({ file, x: Math.max(8, Math.min(x, window.innerWidth - 200)), y: Math.max(8, Math.min(y, window.innerHeight - (file.isDirectory ? 180 : 295))) })
+  }
+
+  function openVideoTags(file: FileEntry) {
+    setContextMenu(null)
+    const entries = selectedPaths.includes(file.path) ? mediaEntries.filter(entry => selectedPaths.includes(entry.path)) : [file]
+    if (!entries.length || entries.some(entry => entry.isDirectory || !entry.videoId)) {
+      setFileAction({ message: 'Refresh the folder to load organization records for every selected video before editing tags.', error: true })
+      return
+    }
+    tagReturnPath.current = file.path
+    setTagBatch(entries.map(entry => ({ videoId: entry.videoId!, path: entry.path, name: entry.name })))
+  }
+  function closeVideoTags() {
+    const path = tagReturnPath.current
+    setTagBatch(null)
+    window.requestAnimationFrame(() => { Array.from(fileListRef.current?.querySelectorAll<HTMLButtonElement>('[data-list-row]') ?? []).find(row => row.dataset.path === path)?.focus() })
   }
 
   async function showInFileManager(file: FileEntry) {
@@ -941,7 +962,7 @@ function App() {
               <Icon name="chevron" size={16} />
             </button>)}
             {listing.entries.length === 0 && <div className="empty-list">No folders or supported video files here.</div>}
-            {(listing.parent || listing.entries.length > 0) && <div className="file-list-tip">Tip: Ctrl-click (⌘-click on Mac) or Shift-click to select several videos or folders. Right-click a selection to move it. A normal click opens a folder.</div>}
+            {(listing.parent || listing.entries.length > 0) && <div className="file-list-tip">Tip: Ctrl-click (⌘-click on Mac) or Shift-click to select several videos or folders. Right-click selected videos to edit their tags together. A normal click opens a folder.</div>}
           </div>
         </>}
         </>}
@@ -957,6 +978,9 @@ function App() {
           <VideoPreview file={selected} playbackAction={playbackRequest?.path === selected.path ? playbackRequest.action : null} onPlayRequestHandled={() => setPlaybackRequest(null)} />
           <div className="selected-file"><span className="selected-file-icon"><Icon name="film" size={27} /></span><div><strong title={selected.name}>{selected.name}</strong><span>{fileSize(selected.size)}</span></div></div>
           {probe && video && <button className="inspector-edit" onClick={() => editFile(selected)}>Edit video</button>}
+          <section aria-label="Video tags"><div className="section-title">TAGS</div>{selected.videoId
+            ? <VideoTags key={`${selected.path}:${selected.videoId}`} videos={[{ videoId: selected.videoId, path: selected.path }]} refreshToken={tagRevision} onChanged={() => setTagRevision(value => value + 1)} />
+            : <p className="no-data">Refresh the folder to load this video's organization record before assigning tags.</p>}</section>
           {loading && <div className="notice">Reading video metadata…</div>}
           {error && <div className="notice error" role="alert"><Icon name="info" size={18} /><span>{error}</span><button onClick={() => setError(null)} aria-label="Dismiss error"><Icon name="close" size={15} /></button></div>}
           {probe && <>
@@ -984,12 +1008,14 @@ function App() {
         <button role="menuitem" onClick={() => void moveEntryToTrash(contextMenu.file)}>Move folder to Trash</button>
       </> : <>
         <button className="edit-menu-item" role="menuitem" onClick={() => editFile(contextMenu.file)}>Edit video</button>
+        <button className="edit-menu-item" role="menuitem" onClick={() => openVideoTags(contextMenu.file)}>Edit tags…{selectedPaths.includes(contextMenu.file.path) && selectedPaths.length > 1 ? ` (${selectedPaths.length})` : ''}</button>
         <button className="rename-menu-item" role="menuitem" onClick={() => openRename(contextMenu.file)}>Rename</button>
         <button className="move-menu-item" role="menuitem" onClick={() => void openMoveWindow(contextMenu.file)}>Move to…{selectedPaths.includes(contextMenu.file.path) && selectedPaths.length > 1 ? ` (${selectedPaths.length})` : ''}</button>
         <button className="duplicate-menu-item" role="menuitem" onClick={() => void duplicateFile(contextMenu.file)}>Duplicate</button>
         <button role="menuitem" onClick={() => void moveEntryToTrash(contextMenu.file)}>{selectedPaths.includes(contextMenu.file.path) && selectedPaths.length > 1 ? `Move ${selectedPaths.length} videos to Trash` : 'Move to Trash'}</button>
       </>}
     </div>}
+    {tagBatch && <TagBatchDialog videos={tagBatch} onChanged={() => setTagRevision(value => value + 1)} onClose={closeVideoTags} />}
     {renameTarget && <div className="rename-backdrop">
       <form className="rename-dialog" role="dialog" aria-modal="true" aria-labelledby="rename-title" onSubmit={event => { event.preventDefault(); void renameFile() }} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); closeRename() } }}>
         <h2 id="rename-title">Rename {renameTarget.isDirectory ? 'folder' : 'video'}</h2>
