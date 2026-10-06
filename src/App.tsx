@@ -124,7 +124,7 @@ function Property({ label, value }: { label: string; value: unknown }) {
   return <div className="property"><dt>{label}</dt><dd>{display(value)}</dd></div>
 }
 
-function VideoPreview({ file }: { file: FileEntry }) {
+function VideoPreview({ file, playRequested, onPlayRequestHandled }: { file: FileEntry; playRequested: boolean; onPlayRequestHandled: () => void }) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const lookupStartedAt = useRef(0)
   const [preview, setPreview] = useState<Preview | null>(null)
@@ -173,6 +173,14 @@ function VideoPreview({ file }: { file: FileEntry }) {
     void videoRef.current.play().catch(() => { setPlaying(false); setPlaybackError(true) })
   }
 
+  const playFromList = useEffectEvent(() => {
+    startPlayback()
+    onPlayRequestHandled()
+  })
+  useEffect(() => {
+    if (playRequested && videoUrl) playFromList()
+  }, [playRequested, videoUrl])
+
   return <section className="preview-section" aria-label="Video preview">
     <div className="section-title preview-title">PREVIEW</div>
     <div className={`preview-frame ${playing ? 'is-playing' : ''}`}>
@@ -201,6 +209,7 @@ function App() {
   const [listing, setListing] = useState<DirectoryListing | null>(null)
   const mediaEntries = useMemo(() => sortMedia(listing?.entries ?? [], mediaSort, sortDirection), [listing, mediaSort, sortDirection])
   const [selected, setSelected] = useState<FileEntry | null>(null)
+  const [playbackPath, setPlaybackPath] = useState<string | null>(null)
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [probe, setProbe] = useState<Probe | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -210,6 +219,7 @@ function App() {
   const [contextMenu, setContextMenu] = useState<{ file: FileEntry; x: number; y: number } | null>(null)
   const [fileAction, setFileAction] = useState<{ message: string; error: boolean } | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const trashRequestPending = useRef(false)
   const [duplicatingFile, setDuplicatingFile] = useState<string | null>(null)
   const [renameTarget, setRenameTarget] = useState<FileEntry | null>(null)
   const [renameStem, setRenameStem] = useState('')
@@ -442,6 +452,7 @@ function App() {
 
   async function browse(path: string, focusTarget?: { path?: string }) {
     try {
+      setPlaybackPath(null)
       setContextMenu(null); setFileAction(null)
       const currentRequest = ++requestId.current
       const next = await invoke<DirectoryListing>('list_directory', { path })
@@ -460,6 +471,7 @@ function App() {
   }
 
   async function selectFile(file: FileEntry, delayMs = 0, preserveMulti = false) {
+    setPlaybackPath(null)
     const currentRequest = ++requestId.current
     if (!preserveMulti) setSelectedPaths([file.path])
     setSelected(file); setProbe(null); setError(null); setLoading(true)
@@ -551,6 +563,19 @@ function App() {
     }
   }
 
+  function playMediaEntry(entry: FileEntry) {
+    if (entry.isDirectory) return
+    // Select explicitly so modifier-clicks cannot leave a different video in the Inspector.
+    selectionAnchor.current = entry.path
+    if (selected?.path !== entry.path) void selectFile(entry)
+    else setSelectedPaths([entry.path])
+    if (inspectorCollapsed) {
+      setInspectorCollapsed(false)
+      setPreference('framewise.inspectorCollapsed', 'false')
+    }
+    setPlaybackPath(entry.path)
+  }
+
   async function openMoveWindow(file: FileEntry) {
     setContextMenu(null)
     const paths = selectedPaths.includes(file.path) ? selectedPaths : [file.path]
@@ -634,6 +659,8 @@ function App() {
   }
 
   async function moveEntryToTrash(file: FileEntry) {
+    if (trashRequestPending.current || deleting || duplicatingFile || renaming || renameTarget || folderBusy) return
+    trashRequestPending.current = true
     setContextMenu(null)
     const paths = file.isDirectory ? [] : selectedPaths.includes(file.path) ? selectedPaths : [file.path]
     const count = paths.length
@@ -678,12 +705,27 @@ function App() {
           setSelectedPaths(paths.filter(path => refreshed.entries.some(entry => entry.path === path)))
         } catch (refreshCause) { reportError('Refreshing folder after Trash error', refreshCause) }
       }
-    } finally { setDeleting(false) }
+    } finally { trashRequestPending.current = false; setDeleting(false) }
   }
 
   function navigateFiles(event: KeyboardEvent<HTMLDivElement>) {
     const focused = event.target instanceof HTMLElement ? event.target.closest<HTMLButtonElement>('[data-list-row]') : null
     if (!focused || !event.currentTarget.contains(focused)) return
+    if (event.key === 'Delete' || (event.key === 'Backspace' && /Mac/i.test(navigator.platform))) {
+      event.preventDefault()
+      const entry = mediaEntries.find(item => !item.isDirectory && selectedPaths.includes(item.path))
+      if (entry && !event.repeat) void moveEntryToTrash(entry)
+      return
+    }
+    if (event.key === 'Enter') {
+      const entry = mediaEntries[Number(focused.dataset.entryIndex)]
+      if (entry && !entry.isDirectory) {
+        // Prevent the button's default click from clearing the playback request.
+        event.preventDefault()
+        if (!event.repeat) playMediaEntry(entry)
+      }
+      return
+    }
     if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
       event.preventDefault()
       const entry = mediaEntries[Number(focused.dataset.entryIndex)]
@@ -853,7 +895,7 @@ function App() {
           </div>
           <div ref={fileListRef} className={`file-list ${mediaView === 'grid' ? `media-grid grid-size-${gridSize}` : ''}`} role="group" aria-label="Files and folders" onKeyDown={navigateFiles}>
             {listing.parent && <button className="file-row back-row" data-list-row="true" data-entry-index="-1" data-path={listing.parent} onClick={() => browse(listing.parent!, { path: listing.path })}><span className="file-icon"><Icon name="arrow" size={18} /></span><span className="file-name">Go back</span></button>}
-            {mediaEntries.map((entry, index) => <button key={entry.path} data-list-row="true" data-entry-index={index} data-path={entry.path} aria-pressed={selectedPaths.includes(entry.path)} className={`file-row ${selectedPaths.includes(entry.path) ? 'selected' : ''}`} onClick={event => selectMediaEntry(entry, index, event)} onContextMenu={event => fileContextMenu(event, entry)}>
+            {mediaEntries.map((entry, index) => <button key={entry.path} data-list-row="true" data-entry-index={index} data-path={entry.path} aria-pressed={selectedPaths.includes(entry.path)} className={`file-row ${selectedPaths.includes(entry.path) ? 'selected' : ''}`} onClick={event => selectMediaEntry(entry, index, event)} onDoubleClick={() => playMediaEntry(entry)} onContextMenu={event => fileContextMenu(event, entry)}>
               {mediaView === 'grid' && !entry.isDirectory
                 ? <MediaThumbnail path={entry.path} revision={listing} placeholder={<Icon name="film" size={32} />} />
                 : <span className={`file-icon ${entry.isDirectory ? 'folder-icon' : 'video-icon'}`}><Icon name={entry.isDirectory ? 'folder' : 'film'} size={mediaView === 'grid' ? 32 : 19} /></span>}
@@ -875,7 +917,7 @@ function App() {
           <button className="panel-toggle inspector-toggle" onClick={toggleInspector} aria-label={inspectorCollapsed ? 'Expand inspector' : 'Collapse inspector'} aria-expanded={!inspectorCollapsed} title={inspectorCollapsed ? 'Expand inspector' : 'Collapse inspector'}><Icon name="chevron" size={17} /></button></div>
         </div>
         {!inspectorCollapsed && (selected ? <div key={selected.path} className="details-body">
-          <VideoPreview file={selected} />
+          <VideoPreview file={selected} playRequested={playbackPath === selected.path} onPlayRequestHandled={() => setPlaybackPath(null)} />
           <div className="selected-file"><span className="selected-file-icon"><Icon name="film" size={27} /></span><div><strong title={selected.name}>{selected.name}</strong><span>{fileSize(selected.size)}</span></div></div>
           {probe && video && <button className="inspector-edit" onClick={() => editFile(selected)}>Edit video</button>}
           {loading && <div className="notice">Reading video metadata…</div>}
