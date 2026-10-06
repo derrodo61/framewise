@@ -4,6 +4,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { ask, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { error as logError } from '@tauri-apps/plugin-log'
+import AppVersion from './AppVersion'
 import { cutPreviewAction } from './cutPreview'
 import { adjacentFrameTime, frameIndexAt } from './frameNavigation'
 import { displayPath, versionedMediaSrc } from './paths'
@@ -238,6 +239,7 @@ export default function Editor({ file, onExit, onSaved }: { file: EditorFile; on
     <header className="editor-header">
       <button className="editor-back" onClick={() => void leave()} disabled={busy}>← Back to media</button>
       <div className="editor-heading"><span className="eyebrow">VIDEO EDITOR</span><h1 title={file.name}>{file.name}</h1></div>
+      <AppVersion />
       <div className="editor-save-actions">
         <button className="editor-save-as" onClick={() => void exportVideo(false)} disabled={!cutApplied || busy}>Save As…</button>
         <button className="editor-save" onClick={() => void exportVideo(true)} disabled={!cutApplied || busy || !file.name.toLowerCase().endsWith('.mp4')} title={!file.name.toLowerCase().endsWith('.mp4') ? 'Use Save As to create an MP4' : undefined}>Save</button>

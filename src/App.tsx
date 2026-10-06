@@ -9,6 +9,7 @@ import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import Editor from './Editor'
 import GenerationPrompt from './GenerationPrompt'
 import TagSettings from './TagSettings'
+import AppVersion from './AppVersion'
 import TagFilter from './TagFilter'
 import { useTagFilter } from './useTagFilter'
 import { filterMedia, visibleSelection, parentPath, sameParent } from './mediaFilter'
@@ -909,7 +910,7 @@ function App() {
 
   return <div className="app-shell">
     <header className="topbar">
-      <div className="brand"><div className="brand-mark"><Icon name="film" size={21} /></div><span>Framewise</span><span className="brand-beta">BETA</span></div>
+      <div className="brand"><div className="brand-mark"><Icon name="film" size={21} /></div><span>Framewise</span><span className="brand-beta">BETA</span><AppVersion /></div>
       <span className="topbar-note">Local video inspector</span>
       <button className="choose-button" onClick={chooseFolder}><Icon name="folder" size={17} /> Choose folder</button>
     </header>
