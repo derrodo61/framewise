@@ -16,6 +16,19 @@ struct Completion { version: u32, id: String, action: Action, items: Vec<Finishe
 pub(crate) struct Operation { directory: PathBuf, plan: Plan }
 
 fn live() -> &'static Mutex<HashMap<String, Vec<PathBuf>>> { static LIVE: OnceLock<Mutex<HashMap<String, Vec<PathBuf>>>> = OnceLock::new(); LIVE.get_or_init(|| Mutex::new(HashMap::new())) }
+pub(crate) struct DiscoveryLease(String);
+impl Drop for DiscoveryLease {
+    fn drop(&mut self) { if let Ok(mut operations) = live().lock() { operations.remove(&self.0); } }
+}
+pub(crate) fn reserve_discovery(root: &Path) -> Result<DiscoveryLease, String> {
+    let mut operations = live().lock().map_err(|_| "Catalog operation state unavailable")?;
+    if operations.values().flatten().any(|path| path.starts_with(root) || root.starts_with(path)) {
+        return Err("A file operation is using this workspace. Try scanning again when it finishes.".into());
+    }
+    let id = format!("discovery-{}", root.display());
+    operations.insert(id.clone(), vec![root.to_path_buf()]);
+    Ok(DiscoveryLease(id))
+}
 fn journal_directory() -> Result<PathBuf, String> { Ok(crate::preferences::settings_dir()?.join("catalog-operations")) }
 pub(crate) fn ensure_paths_idle(paths: &[PathBuf]) -> Result<(), String> {
     if live().lock().map_err(|_| "Catalog operation state unavailable")?.values().flatten().any(|busy| paths.iter().any(|path| busy.starts_with(path) || path.starts_with(busy))) {

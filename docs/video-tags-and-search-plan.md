@@ -290,7 +290,29 @@ Checkpoint:
 
 ### Phase 6 — Workspace discovery and search across subfolders
 
-Status: Pending. Depends on Phase 5.
+Status: Complete. Automated checks pass; user reported the functionality works.
+
+Implemented:
+
+- Scope selector for Current folder / Entire workspace. Entering workspace scope starts discovery; switching scope, opening Settings, or changing workspace cancels the previous scan. Asynchronous requests are stamped with workspace identity and discarded when stale.
+- A serialized background worker discovers regular supported video files, skips links, reports folder/video counts and the current folder, and supports cancellation. It uses a separate SQLite connection and never generates previews or calls ffprobe.
+- Complete folder listings update catalog records atomically. Unreadable folders retain their records. Only a fully successful traversal retires records in vanished subfolders; cancellation and warnings prevent this final cleanup. Existing missing/changed/trashed history and assignments remain intact.
+- Workspace queries use indexed path boundaries and video/tag IDs, with Match all/any, total counts, filename/date sorting in both directions, and pages of 200 results. Filename sorting in workspace queries uses SQLite's alphabetical NOCASE order; current-folder sorting retains its natural filename order.
+- Result rows/cards show their relative folder location. Open containing folder and Show in Explorer/Finder remain available. Thumbnail generation remains visibility-driven through the existing queue.
+- Selection, arrow keys, range selection and context menus share the displayed page. Page/scope changes clear selection and Inspector content. Batch tagging accepts videos from different folders; Move To and Trash explicitly require a single parent folder before submitting a batch. Individual rename/duplicate/edit actions remain available.
+- A workspace scan temporarily reserves its paths against file operations and tag assignments, avoiding discovery races. Playback and preview inspection remain available. Root/scan IDs prevent late cancellation requests from cancelling a newer job.
+- Existing-tag assignment supports multiple checkbox selections, search without losing selections, and an atomic Add selected action for one or several videos. User tested and approved this improvement; all eight backend tag tests, frontend checks, and Clippy passed.
+- Work limits: 10,000 directory entries per folder and 100,000 entries across a workspace scan. Exceeded limits are reported; choose a smaller workspace. Result rendering is bounded by the page size.
+- Automated checks: frontend build, lint and tests; 55 Rust tests; Clippy with warnings denied. Added tests cover nested duplicate filenames, removed files/subtrees, unavailable roots, mid-scan interruption, scan reservations, filter combinations, tag rename/delete, path boundaries, pagination and sort directions. Link-cycle coverage runs on Unix; native Mac/Linux behavior remains unverified here.
+
+Manual checkpoint:
+
+1. Choose a workspace with several video subfolders. Select Entire workspace; check discovery progress and matching results across folders.
+2. Test both views, sorting, grid sizes, paging (if more than 200 matches), arrow keys, Enter playback and Shift/Ctrl selection.
+3. Check videos with identical names in different folders. Play the correct file, reveal it in Explorer, and use Open containing folder.
+4. Select videos from different folders and edit their tags together. Confirm Move To/Trash explain the single-folder restriction; test individual rename/duplicate and same-folder batches.
+5. Cancel a scan, switch workspace while scanning, and return to folder scope. No previous workspace's results should appear. Rescan to complete discovery.
+6. Add/remove a video outside Framewise, rescan, and verify results. Check cached previews remain fast and playback stays responsive.
 
 Work:
 

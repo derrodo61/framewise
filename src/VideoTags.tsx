@@ -25,7 +25,8 @@ export function VideoTags({ videos, refreshToken = 0, onChanged, onBusyChange }:
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  const [chosenTag, setChosenTag] = useState('')
+  const [chosenTags, setChosenTags] = useState<number[]>([])
+  const [tagQuery, setTagQuery] = useState('')
   const [newName, setNewName] = useState('')
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
   useEffect(() => {
@@ -47,7 +48,7 @@ export function VideoTags({ videos, refreshToken = 0, onChanged, onBusyChange }:
       const result = await invoke<TagSelection>(command, { videos: targets, ...args })
       if (alive.current) {
         request.current++
-        setSnapshot(result); setLoading(false); setChosenTag(''); setNewName(''); setNotice(message); onChanged()
+        setSnapshot(result); setLoading(false); setChosenTags([]); setTagQuery(''); setNewName(''); setNotice(message); onChanged()
       }
     } catch (cause) {
       if (alive.current) { setError(report(cause)); setLoading(true); setRevision(value => value + 1) }
@@ -57,6 +58,8 @@ export function VideoTags({ videos, refreshToken = 0, onChanged, onBusyChange }:
   const batch = count > 1
   const assigned = snapshot?.tags.filter(tag => tag.assignedCount > 0) ?? []
   const available = snapshot?.tags.filter(tag => tag.assignedCount < count) ?? []
+  const selectedTags = chosenTags.filter(tagId => available.some(tag => tag.id === tagId))
+  const matchingTags = available.filter(tag => tag.name.toLocaleLowerCase().includes(tagQuery.trim().toLocaleLowerCase()))
   const disabled = loading || busy || !snapshot
   const addMessage = batch ? `Tag added to all ${count} selected videos.` : 'Tag added.'
   const removeMessage = batch ? `Tag removed from all ${count} selected videos.` : 'Tag removed.'
@@ -74,9 +77,15 @@ export function VideoTags({ videos, refreshToken = 0, onChanged, onBusyChange }:
       </div></li>)}
     </ul>
     {!loading && snapshot && assigned.length === 0 && <p className="video-tag-help">{batch ? 'None of these videos have tags yet.' : 'No tags assigned yet.'}</p>}
-    <form onSubmit={event => { event.preventDefault(); if (chosenTag) void mutate('set_video_tag', { tagId: Number(chosenTag), assigned: true }, addMessage) }}>
-      <label htmlFor={`${id}-existing`}>Add an existing tag</label>
-      <div className="video-tag-input"><select id={`${id}-existing`} value={chosenTag} onChange={event => setChosenTag(event.target.value)} disabled={disabled || available.length === 0}><option value="">{available.length ? 'Choose a tag…' : 'No other tags available'}</option>{available.map(tag => <option key={tag.id} value={tag.id}>{tag.name}{batch && tag.assignedCount > 0 ? ` (${tag.assignedCount} of ${count})` : ''}</option>)}</select><button type="submit" disabled={disabled || !chosenTag}>{batch ? 'Add to all' : 'Add'}</button></div>
+    <form onSubmit={event => { event.preventDefault(); if (selectedTags.length) void mutate('add_video_tags', { tagIds: selectedTags }, batch ? `${selectedTags.length} tag(s) added to all ${count} selected videos.` : `${selectedTags.length} tag(s) added.`) }}>
+      <label htmlFor={`${id}-existing`}>Add existing tags</label>
+      <div className="video-tag-input"><input type="search" id={`${id}-existing`} placeholder="Find tags…" value={tagQuery} onChange={event => setTagQuery(event.target.value)} disabled={disabled || available.length === 0} /></div>
+      <fieldset className="existing-tag-options" disabled={disabled}>
+        <legend className="tag-picker-legend">Choose tags to add</legend>
+        {matchingTags.map(tag => <label key={tag.id}><input type="checkbox" checked={selectedTags.includes(tag.id)} onChange={event => setChosenTags(previous => event.target.checked ? [...new Set([...previous, tag.id])] : previous.filter(id => id !== tag.id))} /><span>{tag.name}{batch && tag.assignedCount > 0 ? ` (${tag.assignedCount} of ${count})` : ''}</span></label>)}
+        {!matchingTags.length && <p className="video-tag-help">{available.length ? 'No tags match your search.' : 'No other tags available.'}</p>}
+      </fieldset>
+      <div className="tag-picker-actions"><span>{selectedTags.length} selected</span><button type="button" disabled={disabled || !selectedTags.length} onClick={() => setChosenTags([])}>Clear selection</button><button type="submit" disabled={disabled || !selectedTags.length}>{batch ? 'Add selected to all' : 'Add selected'}</button></div>
     </form>
     <form onSubmit={event => { event.preventDefault(); if (newName.trim()) void mutate('create_and_assign_tag', { name: newName }, addMessage) }}>
       <label htmlFor={`${id}-new`}>Create and add a tag</label>

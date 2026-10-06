@@ -65,25 +65,34 @@ fn selection_on(connection: &Connection, ids: &[i64]) -> Result<TagSelection, St
         .map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
     Ok(TagSelection { video_count: ids.len(), tags })
 }
-enum Assignment { Read, Set { tag_id: i64, assigned: bool }, Create { name: String } }
+enum Assignment { Read, Set { tag_id: i64, assigned: bool }, AddMany { tag_ids: Vec<i64> }, Create { name: String } }
 fn assignment_on(connection: &mut Connection, root: &std::path::Path, videos: &[TagVideo], action: Assignment) -> Result<TagSelection, String> {
     let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|error| error.to_string())?;
     let ids = validate_videos(&transaction, root, videos)?;
     let mutation = match action {
-        Assignment::Read => None,
+        Assignment::Read => vec![],
         Assignment::Set { tag_id, assigned } => {
             let exists: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM tags WHERE id=?1)", [tag_id], |row| row.get(0)).map_err(|error| error.to_string())?;
             if !exists { return Err("This tag no longer exists. Refresh the tags and try again.".into()); }
-            Some((tag_id, assigned))
+            vec![(tag_id, assigned)]
+        }
+        Assignment::AddMany { tag_ids } => {
+            if tag_ids.is_empty() { return Err("Select at least one tag to add.".into()); }
+            let unique: std::collections::HashSet<_> = tag_ids.into_iter().collect();
+            for tag in &unique {
+                let exists: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM tags WHERE id=?1)", [tag], |row| row.get(0)).map_err(|error| error.to_string())?;
+                if !exists { return Err("A selected tag no longer exists. Refresh the tags and try again.".into()); }
+            }
+            unique.into_iter().map(|tag| (tag, true)).collect()
         }
         Assignment::Create { name } => {
             let (display, key) = normalize_tag_name(&name)?;
             transaction.execute("INSERT INTO tags(name,normalized_name) VALUES (?1,?2) ON CONFLICT(normalized_name) DO NOTHING", params![display, key]).map_err(name_error)?;
             let id = transaction.query_row("SELECT id FROM tags WHERE normalized_name=?1", [key], |row| row.get::<_, i64>(0)).map_err(|error| error.to_string())?;
-            Some((id, true))
+            vec![(id, true)]
         }
     };
-    if let Some((tag, assigned)) = mutation {
+    for (tag, assigned) in mutation {
         for video in &ids {
             if assigned { transaction.execute("INSERT INTO video_tags(video_id,tag_id) VALUES (?1,?2) ON CONFLICT DO NOTHING", params![video, tag]) }
             else { transaction.execute("DELETE FROM video_tags WHERE video_id=?1 AND tag_id=?2", params![video, tag]) }.map_err(|error| error.to_string())?;
@@ -106,6 +115,10 @@ pub(crate) async fn selection_tags(videos: Vec<TagVideo>, state: tauri::State<'_
 #[tauri::command]
 pub(crate) async fn set_video_tag(videos: Vec<TagVideo>, tag_id: i64, assigned: bool, state: tauri::State<'_, crate::AppState>) -> Result<TagSelection, String> {
     assignment(crate::selected_root(&state)?, videos, Assignment::Set { tag_id, assigned }).await
+}
+#[tauri::command]
+pub(crate) async fn add_video_tags(videos: Vec<TagVideo>, tag_ids: Vec<i64>, state: tauri::State<'_, crate::AppState>) -> Result<TagSelection, String> {
+    assignment(crate::selected_root(&state)?, videos, Assignment::AddMany { tag_ids }).await
 }
 #[tauri::command]
 pub(crate) async fn create_and_assign_tag(videos: Vec<TagVideo>, name: String, state: tauri::State<'_, crate::AppState>) -> Result<TagSelection, String> {
@@ -235,6 +248,33 @@ mod tests {
         TagVideo { video_id: id, path: video.path }
     }
     fn assigned(result: &TagSelection, name: &str) -> i64 { result.tags.iter().find(|tag| tag.name == name).unwrap().assigned_count }
+
+    #[test]
+    fn adding_multiple_tags_is_atomic_idempotent_and_scoped() {
+        let fixture = Fixture::new();
+        let mut connection = open_at(&fixture.path).unwrap();
+        let root = fixture.folder.canonicalize().unwrap();
+        let first = seed_video(&connection, &fixture, "first.mp4");
+        let second = seed_video(&connection, &fixture, "second.mp4");
+        let other = seed_video(&connection, &fixture, "other.mp4");
+        create_on(&connection, "One").unwrap();
+        create_on(&connection, "Two").unwrap();
+        let one = list_on(&connection, "one").unwrap()[0].id;
+        let two = list_on(&connection, "two").unwrap()[0].id;
+        let targets = [first, second];
+        assert!(assignment_on(&mut connection, &root, &targets, Assignment::AddMany { tag_ids: vec![one, 999] }).is_err());
+        assert_eq!(list_on(&connection, "one").unwrap()[0].video_count, 0);
+        assert!(assignment_on(&mut connection, &root, &targets, Assignment::AddMany { tag_ids: vec![] }).is_err());
+        let result = assignment_on(&mut connection, &root, &targets, Assignment::AddMany { tag_ids: vec![one, two, one] }).unwrap();
+        assert_eq!(assigned(&result, "One"), 2);
+        assert_eq!(assigned(&result, "Two"), 2);
+        let repeated = assignment_on(&mut connection, &root, &targets, Assignment::AddMany { tag_ids: vec![one, two] }).unwrap();
+        assert_eq!(assigned(&repeated, "One"), 2);
+        assert_eq!(assigned(&repeated, "Two"), 2);
+        let untouched = assignment_on(&mut connection, &root, &[other], Assignment::Read).unwrap();
+        assert_eq!(assigned(&untouched, "One"), 0);
+        assert_eq!(assigned(&untouched, "Two"), 0);
+    }
 
     #[test]
     fn folder_filters_match_all_any_and_live_assignments() {

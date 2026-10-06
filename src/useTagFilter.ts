@@ -5,7 +5,7 @@ import { invoke } from '@tauri-apps/api/core'
 type Tag = { id: number; name: string }
 type Scope = { root: string | null; ids: number[]; matchAll: boolean }
 const emptyIds: number[] = []
-export function useTagFilter(listing: { path: string } | null, root: string | null, revision: number, view: string) {
+export function useTagFilter(listing: { path: string } | null, root: string | null, revision: number, view: string, folderFiltering = true) {
   const [scope, setScope] = useState<Scope>({ root: null, ids: [], matchAll: true })
   // Reset on every workspace change, including returning to an earlier workspace.
   if (scope.root !== root) setScope({ root, ids: [], matchAll: true })
@@ -17,7 +17,7 @@ export function useTagFilter(listing: { path: string } | null, root: string | nu
   const matchAll = scope.root === root ? scope.matchAll : true
   const key = JSON.stringify([root, listing?.path, ids, matchAll, revision])
   const active = ids.length > 0
-  const ready = !active || (result?.key === key && result.listing === listing)
+  const ready = !active || !folderFiltering || (result?.key === key && result.listing === listing)
   const matches = ready ? result?.ids ?? emptyIds : emptyIds
 
   useEffect(() => {
@@ -36,15 +36,15 @@ export function useTagFilter(listing: { path: string } | null, root: string | nu
     return () => { current = false }
   }, [listing, root, revision, view])
   useEffect(() => {
-    if (!active || !listing || view !== 'media') return
+    if (!folderFiltering || !active || !listing || view !== 'media') return
     let current = true
     void invoke<number[]>('filter_folder_videos', { path: listing.path, tagIds: ids, matchAll })
       .then(matches => { if (current) setResult({ key, listing, ids: matches, error: null }) })
       .catch(cause => { if (current) setResult({ key, listing, ids: [], error: String(cause) }) })
     return () => { current = false }
-  }, [active, listing, view, key, ids, matchAll])
+  }, [folderFiltering, active, listing, view, key, ids, matchAll])
 
-  return { tags, ids, matchAll, active, ready, matches, error: catalogError ?? (ready && active ? result?.error : null),
+  return { tags, ids, matchAll, active, ready, matches, error: catalogError ?? (folderFiltering && ready && active ? result?.error : null),
     change: (nextIds: number[], nextMode = matchAll) => setScope({ root, ids: nextIds, matchAll: nextMode }) }
 }
 

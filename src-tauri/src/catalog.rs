@@ -63,7 +63,7 @@ pub(crate) fn register_folder(folder: &Path, present_paths: &[String], observed:
     crate::database::with_connection(|connection| register_folder_on(connection, folder, present_paths, observed))
 }
 
-fn register_folder_on(connection: &mut Connection, folder: &Path, present_paths: &[String], observed: &[ObservedVideo]) -> Result<HashMap<String, i64>, String> {
+pub(crate) fn register_folder_on(connection: &mut Connection, folder: &Path, present_paths: &[String], observed: &[ObservedVideo]) -> Result<HashMap<String, i64>, String> {
     let parent = folder.to_string_lossy();
     let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH).map_err(|error| error.to_string())?.as_millis()).map_err(|error| error.to_string())?;
     let present: HashSet<&str> = present_paths.iter().map(String::as_str).collect();

@@ -16,3 +16,16 @@
 [data-theme='dark'] .active-tag-filters button { color: #b7d1ff; background: #253b59; }
 [data-theme='dark'] .tag-filter-error { color: #ffb9c4; }
 [data-theme='dark'] .clear-tag-empty { color: #b7d1ff; border-color: #435169; }
+.workspace-discovery { font-size: 12px; padding: 12px; border: 1px solid #dfe6ef; border-radius: 8px; color: #596b84; }
+.workspace-discovery p { margin-top: 8px; overflow-wrap: anywhere; }
+.workspace-scan-actions, .workspace-pagination { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.workspace-scan-actions { justify-content: space-between; }
+.workspace-discovery progress { width: 100%; margin-top: 10px; }
+.workspace-pagination { justify-content: center; font-size: 12px; padding: 16px 0; color: #596b84; }
+.workspace-discovery button, .workspace-pagination button { padding: 7px 10px; color: inherit; background: #f8fafc; border: 1px solid #d6dfec; border-radius: 6px; cursor: pointer; }
+.workspace-pagination button:disabled { opacity: .5; cursor: default; }
+.result-location { max-width: 28%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; color: #7b899d; }
+.media-grid .result-location { max-width: 100%; width: 100%; text-align: center; }
+[data-theme='dark'] .workspace-discovery { border-color: #354359; }
+[data-theme='dark'] .workspace-discovery, [data-theme='dark'] .workspace-pagination, [data-theme='dark'] .result-location { color: #a9b8ce; }
+[data-theme='dark'] .workspace-discovery button, [data-theme='dark'] .workspace-pagination button { background: #151d29; border-color: #435169; }

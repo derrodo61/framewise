@@ -14,7 +14,13 @@ const { adjacentFrameTime, frameIndexAt } = await loadTypeScript('../src/frameNa
 const { cutPreviewAction } = await loadTypeScript('../src/cutPreview.ts')
 const { nextMediaIndex } = await loadTypeScript('../src/mediaNavigation.ts')
 const { sortMedia } = await loadTypeScript('../src/mediaSort.ts')
-const { filterMedia, visibleSelection } = await loadTypeScript('../src/mediaFilter.ts')
+const { filterMedia, visibleSelection, parentPath, sameParent } = await loadTypeScript('../src/mediaFilter.ts')
+assert.equal(parentPath('C:\\clips\\first.mp4'), 'C:\\clips')
+assert.equal(parentPath('C:\\first.mp4'), 'C:\\')
+assert.equal(parentPath('/first.mp4'), '/')
+assert.equal(parentPath('/clips/first.mp4'), '/clips')
+assert.equal(sameParent(['C:\\clips\\first.mp4', 'C:\\clips\\second.mp4']), true)
+assert.equal(sameParent(['/clips/first.mp4', '/other/first.mp4']), false)
 const filterEntries = [
   { path: 'folder', isDirectory: true },
   { path: 'first.mp4', isDirectory: false, videoId: 1 },
