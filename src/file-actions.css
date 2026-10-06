@@ -25,10 +25,13 @@
 .file-context-menu button:hover,
 .file-context-menu button:focus-visible { background: #fff1f1; }
 .file-context-menu .edit-menu-item,
+.file-context-menu .reveal-menu-item,
 .file-context-menu .rename-menu-item,
 .file-context-menu .move-menu-item,
 .file-context-menu .duplicate-menu-item { color: #245fc4; }
 .file-context-menu .edit-menu-item:hover,
+.file-context-menu .reveal-menu-item:hover,
+.file-context-menu .reveal-menu-item:focus-visible,
 .file-context-menu .edit-menu-item:focus-visible,
 .file-context-menu .rename-menu-item:hover,
 .file-context-menu .rename-menu-item:focus-visible,
@@ -76,10 +79,13 @@
 [data-theme='dark'] .file-context-menu button:hover,
 [data-theme='dark'] .file-context-menu button:focus-visible { background: #452b35; }
 [data-theme='dark'] .file-context-menu .edit-menu-item,
+[data-theme='dark'] .file-context-menu .reveal-menu-item,
 [data-theme='dark'] .file-context-menu .rename-menu-item,
 [data-theme='dark'] .file-context-menu .move-menu-item,
 [data-theme='dark'] .file-context-menu .duplicate-menu-item { color: #b7d1ff; }
 [data-theme='dark'] .file-context-menu .edit-menu-item:hover,
+[data-theme='dark'] .file-context-menu .reveal-menu-item:hover,
+[data-theme='dark'] .file-context-menu .reveal-menu-item:focus-visible,
 [data-theme='dark'] .file-context-menu .edit-menu-item:focus-visible,
 [data-theme='dark'] .file-context-menu .rename-menu-item:hover,
 [data-theme='dark'] .file-context-menu .rename-menu-item:focus-visible,

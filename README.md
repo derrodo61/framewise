@@ -17,6 +17,7 @@ A local desktop app for browsing folders and inspecting video metadata. Built wi
 - With focus in the file list, press Delete (or Backspace on macOS) to open the Trash confirmation for the selected videos, including multiple selections.
 - Right-click a subfolder to move it and its contents to Trash after confirmation.
 - Rename a video or subfolder from its context menu. Video extensions stay unchanged.
+- Reveal a video or subfolder in Explorer (Windows), Finder (macOS), or the system file manager (Linux) from its context menu.
 - Select several videos with Ctrl-click or Shift-click (Command-click on macOS), then right-click a selected video and choose Move to. The separate destination window can browse folders, jump to another location, create a folder, and move the selected videos there.
 - Right-click a folder and choose Move to, or Ctrl/Command-click or Shift-click several folders to move them together with all their contents. A normal click still opens a folder. Folder moves reject existing destination names and destinations inside the selected folders; cached preview associations follow the move. Moving folders between drives copies and verifies the entire tree before removing the source; links and special files in such trees are rejected.
 - Open the editor from the Inspector, scrub through a video, mark one section to remove, preview the cut, and undo it. Save As creates an MP4; Save replaces an MP4 after rendering and verification.

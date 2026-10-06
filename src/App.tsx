@@ -531,7 +531,13 @@ function App() {
   function openFileMenu(file: FileEntry, x: number, y: number) {
     if (deleting || duplicatingFile || renaming || renameTarget) return
     if (!selectedPaths.includes(file.path)) { selectionAnchor.current = file.path; inspectSelection(file) }
-    setContextMenu({ file, x: Math.max(8, Math.min(x, window.innerWidth - 200)), y: Math.max(8, Math.min(y, window.innerHeight - (file.isDirectory ? 140 : 215))) })
+    setContextMenu({ file, x: Math.max(8, Math.min(x, window.innerWidth - 200)), y: Math.max(8, Math.min(y, window.innerHeight - (file.isDirectory ? 180 : 255))) })
+  }
+
+  async function showInFileManager(file: FileEntry) {
+    setContextMenu(null)
+    try { await invoke('reveal_in_file_manager', { path: file.path }) }
+    catch (cause) { setFileAction({ message: reportError('Showing item in file manager', cause), error: true }) }
   }
 
   function inspectSelection(entry: FileEntry | undefined, preserveMulti = false) {
@@ -940,6 +946,7 @@ function App() {
       {!inspectorCollapsed && <div className="column-resizer right-resizer" role="separator" tabIndex={0} aria-label="Resize inspector column" aria-orientation="vertical" aria-valuemin={MIN_INSPECTOR_WIDTH} aria-valuemax={widthLimits('right').max} aria-valuenow={effectiveInspectorWidth} onPointerDown={event => startResize('right', event)} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize} onKeyDown={event => resizeWithKeyboard('right', event)} />}
     </div>
     {contextMenu && <div ref={contextMenuRef} className="file-context-menu" role="menu" aria-label={`Actions for ${contextMenu.file.name}`} style={{ left: contextMenu.x, top: contextMenu.y }}>
+      <button className="reveal-menu-item" role="menuitem" onClick={() => void showInFileManager(contextMenu.file)}>{/Win/i.test(navigator.platform) ? 'Show in Explorer' : /Mac/i.test(navigator.platform) ? 'Show in Finder' : 'Show in File Manager'}</button>
       {contextMenu.file.isDirectory ? <>
         <button className="rename-menu-item" role="menuitem" onClick={() => openRename(contextMenu.file)}>Rename folder</button>
         <button className="move-menu-item" role="menuitem" onClick={() => void openMoveWindow(contextMenu.file)}>Move to…{selectedPaths.includes(contextMenu.file.path) && selectedPaths.length > 1 ? ` (${selectedPaths.length})` : ''}</button>
