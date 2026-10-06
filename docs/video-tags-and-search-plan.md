@@ -68,7 +68,36 @@ Status: Complete.
 
 ### Phase 1 — Database foundation and stable video records
 
-Status: Pending.
+Status: Complete. Automated checks passed; the user confirmed development-mode browsing, cached previews, and restarting work.
+
+Implementation decisions:
+
+- Shared initialization and connection ownership live in `src-tauri/src/database.rs`; preview queries use that connection.
+- SQLite `user_version` remains 1 and the `previews` table is unchanged, preserving the installed 0.1.21 app's preview access. New catalog migrations use `catalog_schema.version`, currently 1. A compatibility test reads and writes previews through a legacy connection without the new tag validation function.
+- Before migrating an existing database, SQLite creates a consistent snapshot (including committed WAL data) named `~/.framewise/framewise-before-catalog-v1-<timestamp>.db`. The snapshot is flushed before migration, and its path is logged. Successful catalog initialization does not repeat this backup on subsequent launches.
+- Tables cover videos, tags, assignments, completed folder discovery, and future workspace scan runs. Assignments enforce foreign keys and unique video/tag pairs.
+- Normal folder opening/refresh registers direct-child videos, returning optional `videoId` values. Discovery uses existing filesystem metadata, with nanosecond modification times, and does not run ffprobe or generate thumbnails. File-operation response listings will be integrated in Phase 2.
+- Unchanged active records retain their IDs. A changed size or modification time retires the old record as `changed` and creates a new, untagged record. Absent direct children become `missing` only after a successful listing. Present files with unreadable metadata and files in other folders are not marked missing.
+- Reappearing paths get new IDs rather than silently inheriting historical assignments. Size/time are only identity hints: unrelated replacements with identical hints cannot be detected yet. Explicit in-app identity preservation belongs to Phase 2; external reconciliation remains deferred.
+- Tag display names preserve trimmed spelling, allow 1–100 characters, and reject control characters. Unique keys use Unicode normalization and full case folding, including composed/decomposed accents and `Straße` / `STRASSE` equivalence. Database constraints validate keys using the shared connection's registered SQL function.
+- Preview cache removal does not affect catalog records or assignments. Unsupported schemas and migration failures leave existing records intact; migrations are transactional.
+
+Validation:
+
+- Rust tests cover WAL-aware backups, reopening, legacy preview compatibility, rollback on migration failure, Unicode validation, duplicate assignments, foreign keys, stable discovery IDs, retained history, missing metadata, folder isolation, and transaction rollback for an invalid batch.
+- Existing preview lifecycle and filesystem/editor tests continue to pass.
+- Frontend production build, lint, and existing tests pass. No installer or version bump was created.
+- Manual development-mode checks for browsing, cached preview responsiveness, and restarting were confirmed by the user. Installed 0.1.21 compatibility was verified through the database compatibility test; a manual installed-app check and manual inspection of the backup file were not reported.
+
+Manual checkpoint:
+
+1. Start the development app and browse a folder; verify the existing file list and Inspector behave as before.
+2. Select previously previewed videos; check that cached previews remain fast.
+3. Restart the development app and repeat browsing and previewing.
+4. Check `.framewise` for the pre-migration snapshot after the first successful upgrade of an existing database.
+5. Optionally run the installed 0.1.21 app and confirm its previews still work. Its file actions do not maintain catalog identities yet; Phase 2 integrates those actions in the development app.
+
+This phase adds backend foundations only; tag management and assignment controls arrive in Phases 3 and 4.
 
 Work:
 

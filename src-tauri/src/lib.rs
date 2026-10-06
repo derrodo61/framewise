@@ -7,6 +7,8 @@ mod rename;
 mod move_files;
 mod preferences;
 mod preview_index;
+mod database;
+mod catalog;
 #[cfg(desktop)]
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
@@ -21,6 +23,9 @@ struct FileEntry {
     is_directory: bool,
     size: Option<u64>,
     modified_at: Option<u64>,
+    video_id: Option<i64>,
+    #[serde(skip)]
+    modified_ns: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -78,7 +83,7 @@ fn select_root(path: String, state: tauri::State<'_, AppState>) -> Result<Direct
         return Err("The selected path is not a folder".into());
     }
     *state.0.lock().map_err(|_| "App state is unavailable".to_string())? = Some(root.clone());
-    list_folder(&root, &root)
+    list_folder(&root, &root).map(register_browsed_videos)
 }
 
 fn list_folder(path: &Path, root: &Path) -> Result<DirectoryListing, String> {
@@ -96,6 +101,9 @@ fn list_folder(path: &Path, root: &Path) -> Result<DirectoryListing, String> {
             name: item.file_name().to_string_lossy().into_owned(),
             path: path.to_string_lossy().into_owned(),
             is_directory: file_type.is_dir(),
+            video_id: None,
+            modified_ns: metadata.as_ref().and_then(|metadata| metadata.modified().ok())
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok()).map(|duration| duration.as_nanos().to_string()),
             size: if file_type.is_file() { metadata.as_ref().map(|metadata| metadata.len()) } else { None },
             modified_at: metadata.and_then(|metadata| metadata.modified().ok())
                 .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
@@ -117,7 +125,19 @@ fn list_directory(path: String, state: tauri::State<'_, AppState>) -> Result<Dir
     if !resolved.is_dir() {
         return Err("The selected path is not a folder".into());
     }
-    list_folder(&resolved, &root)
+    list_folder(&resolved, &root).map(register_browsed_videos)
+}
+
+fn register_browsed_videos(mut listing: DirectoryListing) -> DirectoryListing {
+    let present: Vec<_> = listing.entries.iter().filter(|entry| !entry.is_directory).map(|entry| entry.path.clone()).collect();
+    let observed: Vec<_> = listing.entries.iter().filter(|entry| !entry.is_directory).filter_map(|entry| Some(catalog::ObservedVideo {
+        path: entry.path.clone(), name: entry.name.clone(), size: entry.size?, modified_ns: entry.modified_ns.clone()?,
+    })).collect();
+    match catalog::register_folder(Path::new(&listing.path), &present, &observed) {
+        Ok(ids) => { for entry in &mut listing.entries { entry.video_id = ids.get(&entry.path).copied(); } }
+        Err(error) => log::error!("Could not register browsed videos: {error}"),
+    }
+    listing
 }
 
 #[tauri::command]
@@ -699,8 +719,8 @@ pub fn run() {
             } else if let Err(error) = migrate_preview_cache(app.handle()) {
                 log::warn!("Could not migrate previous preview cache: {error}");
             }
-            if let Err(error) = preview_index::initialize() {
-                log::error!("Could not prepare preview index: {error}");
+            if let Err(error) = database::initialize() {
+                log::error!("Could not prepare Framewise database: {error}");
             }
             Ok(())
         })

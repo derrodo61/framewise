@@ -49,6 +49,8 @@ Framewise saves the startup folder, theme, panel layout, and window state in `~/
 
 Video preview images are generated when needed and saved in `~/.framewise/previews`. A SQLite index at `~/.framewise/framewise.db` connects each video path and file version to its image. Existing images are added to the index when their videos are opened. On startup, Framewise moves previews from its earlier cache folder into `~/.framewise/previews`. You can delete preview images to reclaim space; Framewise will regenerate them as needed. Both locations are shown in Settings.
 
+The `codex/video-tags-and-search` feature branch is building a video catalog and tag system in phases; see [the roadmap](docs/video-tags-and-search-plan.md). Phase 1 adds video records and tag tables to the same database, independently of the preview cache. Before upgrading an existing database, Framewise writes a consistent `framewise-before-catalog-v1-<timestamp>.db` snapshot alongside it. The preview schema remains compatible with 0.1.21. Tag controls and file-operation identity preservation are later phases; changed or reappearing files are conservatively recorded as new videos until reconciliation is available.
+
 If `ffprobe` works in a new terminal but Framewise cannot find it, restart the terminal that launches `npm run tauri dev` so it picks up your updated `PATH`. On Windows, Framewise also looks in Windows Package Manager's FFmpeg installation folder. `FFPROBE_PATH` takes precedence over both locations.
 
 ## Error logs

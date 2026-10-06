@@ -25,7 +25,7 @@ import './preview.css'
 import './file-actions.css'
 import './media-view.css'
 
-type FileEntry = { name: string; path: string; isDirectory: boolean; size: number | null; modifiedAt: number | null }
+type FileEntry = { name: string; path: string; isDirectory: boolean; size: number | null; modifiedAt: number | null; videoId?: number | null }
 type DirectoryListing = { path: string; parent: string | null; entries: FileEntry[] }
 type TrashBatchResult = { listing: DirectoryListing; movedCount: number; error: string | null }
 type DuplicateResult = { listing: DirectoryListing; duplicatedPath: string }

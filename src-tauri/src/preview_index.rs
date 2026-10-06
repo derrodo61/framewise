@@ -1,59 +1,17 @@
-use std::{fs, path::{Path, PathBuf}, sync::{Mutex, OnceLock}, time::Duration};
+use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::preferences;
+use crate::database::with_connection;
+pub(crate) use crate::database::database_path;
 
 pub(crate) struct Entry {
     pub version: String,
     pub image_name: String,
 }
 
-pub(crate) fn database_path() -> Result<PathBuf, String> {
-    Ok(preferences::settings_dir()?.join("framewise.db"))
-}
-
 fn path_text(path: &Path) -> String {
     path.to_string_lossy().into_owned()
-}
-
-fn open_at(path: &Path) -> Result<Connection, String> {
-    fs::create_dir_all(path.parent().ok_or("Cannot locate Framewise database folder")?)
-        .map_err(|error| format!("Cannot create Framewise database folder: {error}"))?;
-    let connection = Connection::open(path)
-        .map_err(|error| format!("Cannot open Framewise database: {error}"))?;
-    connection.busy_timeout(Duration::from_secs(3))
-        .map_err(|error| format!("Cannot configure Framewise database: {error}"))?;
-    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))
-        .map_err(|error| format!("Cannot read Framewise database version: {error}"))?;
-    if version != 0 && version != 1 {
-        return Err(format!("Unsupported Framewise database version: {version}"));
-    }
-    if version == 0 {
-        connection.execute_batch("PRAGMA journal_mode=WAL;
-            CREATE TABLE IF NOT EXISTS previews (
-                video_path TEXT PRIMARY KEY NOT NULL,
-                version TEXT NOT NULL,
-                image_name TEXT NOT NULL
-            );
-            PRAGMA user_version=1;")
-            .map_err(|error| format!("Cannot initialize Framewise database: {error}"))?;
-    }
-    Ok(connection)
-}
-
-fn with_connection<T>(operation: impl FnOnce(&mut Connection) -> Result<T, String>) -> Result<T, String> {
-    static DATABASE: OnceLock<Mutex<Option<Connection>>> = OnceLock::new();
-    let mut guard = DATABASE.get_or_init(|| Mutex::new(None)).lock()
-        .map_err(|_| "Preview index is unavailable".to_string())?;
-    if guard.is_none() {
-        *guard = Some(open_at(&database_path()?)?);
-    }
-    operation(guard.as_mut().ok_or("Preview index is unavailable")?)
-}
-
-pub(crate) fn initialize() -> Result<(), String> {
-    with_connection(|_| Ok(()))
 }
 
 fn find_on(connection: &Connection, video: &Path) -> rusqlite::Result<Option<Entry>> {
@@ -172,7 +130,8 @@ fn relocate_folder_on(connection: &mut Connection, old: &Path, new: &Path) -> Re
 
 #[cfg(test)]
 mod tests {
-    use super::{find_on, forget_folder_on, forget_on, open_at, record_on, relocate_folder_on, relocate_on};
+    use super::{find_on, forget_folder_on, forget_on, record_on, relocate_folder_on, relocate_on};
+    use crate::database::open_at;
     use std::{fs, time::{SystemTime, UNIX_EPOCH}};
 
     #[test]
