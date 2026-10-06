@@ -8,6 +8,7 @@ import { listen } from '@tauri-apps/api/event'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import Editor from './Editor'
 import GenerationPrompt from './GenerationPrompt'
+import TagSettings from './TagSettings'
 import MediaThumbnail from './MediaThumbnail'
 import { generateThumbnail } from './thumbnailQueue'
 import { nextMediaIndex } from './mediaNavigation'
@@ -237,6 +238,7 @@ function App() {
   const [newFolderName, setNewFolderName] = useState('')
   const [folderBusy, setFolderBusy] = useState(false)
   const [view, setView] = useState<'media' | 'settings'>('media')
+  const [settingsTab, setSettingsTab] = useState<'settings' | 'tags'>('settings')
   const [theme, setTheme] = useState<'light' | 'dark'>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
   const [defaultFolder, setDefaultFolder] = useState<string | null>(() => getPreference('framewise.defaultFolder'))
   const [settingsError, setSettingsError] = useState<string | null>(null)
@@ -346,14 +348,14 @@ function App() {
   const availableForPanels = Math.max(viewportWidth, 760) - MIN_MEDIA_WIDTH
   const effectiveWorkspaceWidth = workspaceCollapsed
     ? COLLAPSED_WIDTH
-    : Math.max(MIN_WORKSPACE_WIDTH, Math.min(workspaceWidth, availableForPanels - (inspectorCollapsed ? COLLAPSED_WIDTH : MIN_INSPECTOR_WIDTH)))
+    : Math.max(MIN_WORKSPACE_WIDTH, Math.min(workspaceWidth, availableForPanels - (view === 'settings' ? 0 : inspectorCollapsed ? COLLAPSED_WIDTH : MIN_INSPECTOR_WIDTH)))
   const effectiveInspectorWidth = inspectorCollapsed
     ? COLLAPSED_WIDTH
     : Math.max(MIN_INSPECTOR_WIDTH, Math.min(inspectorWidth, availableForPanels - effectiveWorkspaceWidth))
 
   function widthLimits(side: PanelSide) {
     return side === 'left'
-      ? { min: MIN_WORKSPACE_WIDTH, max: availableForPanels - effectiveInspectorWidth }
+      ? { min: MIN_WORKSPACE_WIDTH, max: availableForPanels - (view === 'settings' ? 0 : effectiveInspectorWidth) }
       : { min: MIN_INSPECTOR_WIDTH, max: availableForPanels - effectiveWorkspaceWidth }
   }
 
@@ -456,6 +458,12 @@ function App() {
     document.documentElement.dataset.theme = nextTheme
     setPreference('framewise.theme', nextTheme)
     setTheme(nextTheme)
+  }
+
+  function openSettings() {
+    setContextMenu(null)
+    setPlaybackRequest(null)
+    setView('settings')
   }
 
   async function browse(path: string, focusTarget?: { path?: string }) {
@@ -818,7 +826,7 @@ function App() {
       <button className="choose-button" onClick={chooseFolder}><Icon name="folder" size={17} /> Choose folder</button>
     </header>
 
-    <div className={`workspace ${workspaceCollapsed ? 'left-collapsed' : ''} ${inspectorCollapsed ? 'right-collapsed' : ''} ${resizing ? 'resizing' : ''}`} style={{ '--left-width': `${effectiveWorkspaceWidth}px`, '--right-width': `${effectiveInspectorWidth}px` } as CSSProperties}>
+    <div className={`workspace ${view === 'settings' ? 'settings-view' : ''} ${workspaceCollapsed ? 'left-collapsed' : ''} ${inspectorCollapsed ? 'right-collapsed' : ''} ${resizing ? 'resizing' : ''}`} style={{ '--left-width': `${effectiveWorkspaceWidth}px`, '--right-width': `${effectiveInspectorWidth}px` } as CSSProperties}>
       <aside className={`sidebar ${workspaceCollapsed ? 'collapsed' : ''}`} aria-label="Workspace">
         <div className="sidebar-heading">
           {!workspaceCollapsed && <span>WORKSPACE</span>}
@@ -833,8 +841,8 @@ function App() {
           <div className="sidebar-current" title={listing ? displayPath(listing.path) : undefined}>{listing && displayPath(listing.path)}</div>
         </> : <div className="sidebar-hint">Choose a folder to see your videos here.</div>}
         {workspaceCollapsed
-          ? <button className={`rail-icon settings-rail ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')} title="Settings" aria-label="Settings"><Icon name="settings" size={20} /></button>
-          : <button className={`sidebar-settings ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}><Icon name="settings" size={18} /> Settings</button>}
+          ? <button className={`rail-icon settings-rail ${view === 'settings' ? 'active' : ''}`} onClick={openSettings} title="Settings" aria-label="Settings"><Icon name="settings" size={20} /></button>
+          : <button className={`sidebar-settings ${view === 'settings' ? 'active' : ''}`} onClick={openSettings}><Icon name="settings" size={18} /> Settings</button>}
         {!workspaceCollapsed && <div className="sidebar-bottom"><span className="status-dot" /> Files stay on your device</div>}
       </aside>
 
@@ -843,8 +851,21 @@ function App() {
           <div className="content-heading">
             <div className="eyebrow">PREFERENCES</div>
             <h1>Settings</h1>
-            <p>Choose how Framewise looks and starts on this computer.</p>
+            <p>Manage your tags and choose how Framewise looks and starts.</p>
           </div>
+          <div className="settings-tabs" role="tablist" aria-label="Settings sections" onKeyDown={event => {
+            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+            if (!(event.target instanceof HTMLElement) || event.target.getAttribute('role') !== 'tab') return
+            event.preventDefault()
+            const next = event.key === 'Home' ? 'settings' : event.key === 'End' ? 'tags' : settingsTab === 'settings' ? 'tags' : 'settings'
+            setSettingsTab(next)
+            event.currentTarget.closest('main')?.scrollTo({ top: 0 })
+            event.currentTarget.querySelector<HTMLButtonElement>(`#${next}-tab`)?.focus()
+          }}>
+            {(['settings', 'tags'] as const).map(tab => <button key={tab} id={`${tab}-tab`} role="tab" aria-selected={settingsTab === tab} aria-controls={`${tab}-tab-panel`} tabIndex={settingsTab === tab ? 0 : -1} onClick={event => { setSettingsTab(tab); event.currentTarget.closest('main')?.scrollTo({ top: 0 }) }}>{tab === 'settings' ? 'Settings' : 'Tags'}</button>)}
+          </div>
+          <div id="tags-tab-panel" role="tabpanel" aria-labelledby="tags-tab" hidden={settingsTab !== 'tags'}><TagSettings /></div>
+          <div id="settings-tab-panel" role="tabpanel" aria-labelledby="settings-tab" hidden={settingsTab !== 'settings'}>
           <section className="settings-card" aria-labelledby="appearance-heading">
             <div className="settings-card-heading"><div className="settings-card-icon"><Icon name="sun" size={22} /></div><div><h2 id="appearance-heading">Appearance</h2><p>Choose the color theme for Framewise.</p></div></div>
             <div className="theme-options" role="radiogroup" aria-labelledby="appearance-heading">
@@ -881,6 +902,7 @@ function App() {
             {previewIndexError && <div className="settings-error" role="alert"><Icon name="info" size={18} /><span>{previewIndexError}</span></div>}
             <p className="settings-footnote">Framewise keeps preview images in <code>.framewise/previews</code> and their video associations in <code>.framewise/framewise.db</code>. Images can be regenerated if deleted.</p>
           </section>
+          </div>
         </> : <>
         <div className="content-heading">
           <div className="eyebrow">YOUR MEDIA</div>
@@ -925,7 +947,7 @@ function App() {
         </>}
       </main>
 
-      <section className={`details-panel ${inspectorCollapsed ? 'collapsed' : ''}`} aria-label="Video metadata">
+      {view === 'media' && <section className={`details-panel ${inspectorCollapsed ? 'collapsed' : ''}`} aria-label="Video metadata">
         <div className="details-top">
           {!inspectorCollapsed && <div><div className="eyebrow">INSPECTOR</div><h2>File details</h2></div>}
           <div className="details-actions">{!inspectorCollapsed && probe && <button className="icon-button" onClick={copyMetadata} title="Copy raw metadata" aria-label="Copy raw metadata"><Icon name={copyDone ? 'check' : 'copy'} size={17} /></button>}
@@ -950,9 +972,9 @@ function App() {
             <details className="raw-details"><summary>View raw metadata</summary><pre>{JSON.stringify(probe, null, 2)}</pre></details>
           </>}
         </div> : <div className="details-empty"><div className="details-empty-icon"><Icon name="info" size={27} /></div><h3>Nothing selected</h3><p>Choose a video from the browser to see its metadata here.</p>{error && <div className="notice error" role="alert">{error}</div>}</div>)}
-      </section>
+      </section>}
       {!workspaceCollapsed && <div className="column-resizer left-resizer" role="separator" tabIndex={0} aria-label="Resize workspace column" aria-orientation="vertical" aria-valuemin={MIN_WORKSPACE_WIDTH} aria-valuemax={widthLimits('left').max} aria-valuenow={effectiveWorkspaceWidth} onPointerDown={event => startResize('left', event)} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize} onKeyDown={event => resizeWithKeyboard('left', event)} />}
-      {!inspectorCollapsed && <div className="column-resizer right-resizer" role="separator" tabIndex={0} aria-label="Resize inspector column" aria-orientation="vertical" aria-valuemin={MIN_INSPECTOR_WIDTH} aria-valuemax={widthLimits('right').max} aria-valuenow={effectiveInspectorWidth} onPointerDown={event => startResize('right', event)} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize} onKeyDown={event => resizeWithKeyboard('right', event)} />}
+      {view === 'media' && !inspectorCollapsed && <div className="column-resizer right-resizer" role="separator" tabIndex={0} aria-label="Resize inspector column" aria-orientation="vertical" aria-valuemin={MIN_INSPECTOR_WIDTH} aria-valuemax={widthLimits('right').max} aria-valuenow={effectiveInspectorWidth} onPointerDown={event => startResize('right', event)} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize} onKeyDown={event => resizeWithKeyboard('right', event)} />}
     </div>
     {contextMenu && <div ref={contextMenuRef} className="file-context-menu" role="menu" aria-label={`Actions for ${contextMenu.file.name}`} style={{ left: contextMenu.x, top: contextMenu.y }}>
       <button className="reveal-menu-item" role="menuitem" onClick={() => void showInFileManager(contextMenu.file)}>{/Win/i.test(navigator.platform) ? 'Show in Explorer' : /Mac/i.test(navigator.platform) ? 'Show in Finder' : 'Show in File Manager'}</button>

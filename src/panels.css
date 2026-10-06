@@ -92,6 +92,7 @@
 #root { height: 100vh; }
 .app-shell { height: 100%; min-height: 0; }
 .workspace { overflow: hidden; }
+.workspace.settings-view { grid-template-columns: var(--left-width) minmax(0, 1fr); }
 .main-panel { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .details-panel { min-height: 0; overflow: hidden; }
 .details-body { flex: 1; min-height: 0; overscroll-behavior: contain; }

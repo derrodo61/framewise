@@ -12,9 +12,10 @@ pub(crate) fn normalize_tag_name(name: &str) -> Result<(String, String), String>
     if display.is_empty() || display.chars().count() > 100 || display.chars().any(char::is_control) {
         return Err("Choose a tag name with 1–100 characters and no control characters.".into());
     }
-    let key = display.nfkc().default_case_fold().nfkc().collect();
+    let key = tag_search_key(display);
     Ok((display.to_owned(), key))
 }
+pub(crate) fn tag_search_key(query: &str) -> String { query.trim().nfkc().default_case_fold().nfkc().collect() }
 
 pub(crate) fn open_at(path: &Path) -> Result<Connection, String> {
     fs::create_dir_all(path.parent().ok_or("Cannot locate Framewise database folder")?)

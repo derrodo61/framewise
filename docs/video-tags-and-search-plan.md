@@ -164,7 +164,33 @@ Checkpoint:
 
 ### Phase 3 — Manage tags
 
-Status: Pending. Depends on Phase 1.
+Status: Core functionality tested by the user with no problems reported. Settings/Tags tab refinement implemented; manual layout checkpoint pending. Depends on Phase 1.
+
+Implementation decisions:
+
+- Settings contains a Manage tags section with create, search, inline rename, refresh, and delete controls. It uses asynchronous backend commands and reloads when Settings opens; stale search responses cannot replace the current search results.
+- Settings now separates general preferences and tag management into **Settings** and **Tags** tabs. The tabs remain accessible while scrolling; Left/Right and Home/End navigate them. A long tag list does not move the general preferences downward, and switching tabs retains tag search/edit state for the current Settings session.
+- Search uses the same Unicode normalization and full case folding as tag-name uniqueness. Create/rename trim names, preserve display spelling, and report validation or duplicate-name errors. Changing only display case is supported.
+- Tag rows show the count of assigned videos across the local catalog, including missing/trashed records. Delete confirmation states that assignments are removed and video files are kept.
+- Deletion atomically verifies the confirmed tag name and assignment count. If they changed while the dialog was open, deletion is rejected and the UI refreshes for another review. Renaming preserves the tag ID and its assignments.
+- Settings now spans the full content area to the right of Workspace. The Inspector and its divider are absent in Settings; returning to Your media restores the saved Inspector layout. Opening Settings clears pending playback requests, and unmounting the Inspector stops video playback.
+- No schema migration, version bump, or installer was needed for this phase. Assigning tags to videos remains Phase 4.
+
+Validation:
+
+- Backend tests cover tag persistence, whitespace/empty/control-character/length validation, Unicode-equivalent duplicates, Unicode search, rename collisions, display-case changes, stable IDs/assignment counts, stale deletion confirmation, and deletion without removing video records.
+- All 45 backend tests pass alongside existing frontend tests, build, lint, and Rust clippy checks.
+- The user tested tag management and the full-width Settings layout and reported no problems. They requested separate tabs to keep long tag lists separate from other preferences; that layout refinement is implemented and awaits their manual check.
+
+Manual checkpoint:
+
+1. Open Settings from Your media with an expanded Inspector. Confirm Settings occupies the former middle and right area, with no Inspector or right divider.
+2. Create `Landscape`, `Keeper`, and a Unicode tag such as `Café`. Restart and confirm they remain.
+3. Try creating `landscape`, an empty/whitespace-only name, and a name longer than 100 characters. Confirm clear validation and no extra tag.
+4. Search for a tag, rename it, cancel another rename, and change only a tag's display case.
+5. Delete a tag: cancel once, then confirm. Verify the tag disappears and videos remain untouched.
+6. Return to Your media; check the Inspector layout, preview, and playback. Also check Settings with a collapsed Inspector, collapsed Workspace, and light/dark themes.
+7. Counts will normally be zero until Phase 4 assignment controls exist; assignment preservation and deletion counts are covered by seeded backend tests now.
 
 Work:
 

@@ -27,6 +27,7 @@ A local desktop app for browsing folders and inspecting video metadata. Built wi
 - Drag the dividers to resize Workspace and Inspector, or focus a divider and use the arrow keys. Widths are saved locally.
 - Set a startup folder in Settings so it opens automatically the next time the app starts.
 - Choose a light or dark theme in Settings. Window size and position are restored when the app reopens.
+- Manage reusable tags in Settings: create, search, rename, and delete tags locally. Deleting a tag removes its assignments, never video files. Tag assignment controls are being added in the next feature phase.
 - View or copy the full `ffprobe` JSON output.
 - Files are read locally; the app does not upload them.
 
