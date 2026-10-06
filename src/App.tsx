@@ -7,6 +7,7 @@ import { error as logError, info as logInfo } from '@tauri-apps/plugin-log'
 import { listen } from '@tauri-apps/api/event'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import Editor from './Editor'
+import GenerationPrompt from './GenerationPrompt'
 import MediaThumbnail from './MediaThumbnail'
 import { generateThumbnail } from './thumbnailQueue'
 import { nextMediaIndex } from './mediaNavigation'
@@ -880,6 +881,7 @@ function App() {
           {loading && <div className="notice">Reading video metadata…</div>}
           {error && <div className="notice error" role="alert"><Icon name="info" size={18} /><span>{error}</span><button onClick={() => setError(null)} aria-label="Dismiss error"><Icon name="close" size={15} /></button></div>}
           {probe && <>
+            <GenerationPrompt probe={probe} />
             <div className="section-title">OVERVIEW</div>
             <dl className="property-list"><Property label="Duration" value={duration(probe.format?.duration)} /><Property label="File size" value={fileSize(probe.format?.size ?? selected.size)} /><Property label="Container" value={probe.format?.format_long_name ?? probe.format?.format_name} /><Property label="Bitrate" value={bitrate(probe.format?.bit_rate)} /></dl>
             <div className="section-title">VIDEO STREAM</div>

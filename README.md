@@ -10,6 +10,7 @@ A local desktop app for browsing folders and inspecting video metadata. Built wi
 - Sort either view by filename or date modified, ascending or descending. Folders stay first; sorting choices are saved.
 - Create a subfolder directly from the media file list.
 - Click a video to see container, video, audio, and embedded tag metadata.
+- See and copy positive and negative generation prompts in the Inspector. Embedded WAN2GP JSON and ComfyUI execution graphs are detected; ComfyUI extraction follows active output connections. Unknown formats, missing prompts, and unsupported text transformations are explained. Sidecar files and workflow-only prompt reconstruction are not supported yet.
 - See a thumbnail in the Inspector and click Play to watch the video in the same space.
 - Right-click a video to move it to the system Trash or Recycle Bin after confirmation.
 - Right-click a subfolder to move it and its contents to Trash after confirmation.

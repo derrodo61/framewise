@@ -1,0 +1,12 @@
+.generation-format { font-size: 12px; color: #68788e; margin: 0 0 12px; }
+.generation-prompt-text { margin-bottom: 14px; min-width: 0; }
+.generation-prompt-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: #354358; }
+.generation-prompt-heading button { border: 1px solid #d6dfec; border-radius: 5px; padding: 5px 8px; background: #eff5ff; color: #2463ce; cursor: pointer; font: inherit; }
+.generation-prompt-text pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; padding: 12px; border: 1px solid #e0e7f0; border-radius: 7px; background: #f8fafc; color: #354358; font-family: inherit; line-height: 1.6; font-size: 12px; user-select: text; }
+.generation-prompt-source { display: block; color: #7b899d; font-size: 10px; overflow-wrap: anywhere; }
+.generation-warning, .generation-prompt-text > p { font-size: 11px; line-height: 1.5; color: #986420; }
+[data-theme="dark"] .generation-format, [data-theme="dark"] .generation-prompt-source { color: #a9b8ce; }
+[data-theme="dark"] .generation-prompt-heading, [data-theme="dark"] .generation-prompt-text pre { color: #d9e5f5; }
+[data-theme="dark"] .generation-prompt-text pre { background: #151d29; border-color: #354359; }
+[data-theme="dark"] .generation-prompt-heading button { background: #284363; border-color: #435169; color: #a8caff; }
+[data-theme="dark"] .generation-warning, [data-theme="dark"] .generation-prompt-text > p { color: #e9bd7a; }
