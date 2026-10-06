@@ -8,6 +8,13 @@ import { listen } from '@tauri-apps/api/event'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import Editor from './Editor'
 import GenerationPrompt from './GenerationPrompt'
+import TagSettings from './TagSettings'
+import TagFilter from './TagFilter'
+import { useTagFilter } from './useTagFilter'
+import { filterMedia, visibleSelection, parentPath, sameParent } from './mediaFilter'
+import { useWorkspaceSearch } from './useWorkspaceSearch'
+import { VideoTags, TagBatchDialog } from './VideoTags'
+import type { NamedTagVideo } from './VideoTags'
 import MediaThumbnail from './MediaThumbnail'
 import { generateThumbnail } from './thumbnailQueue'
 import { nextMediaIndex } from './mediaNavigation'
@@ -25,8 +32,8 @@ import './preview.css'
 import './file-actions.css'
 import './media-view.css'
 
-type FileEntry = { name: string; path: string; isDirectory: boolean; size: number | null; modifiedAt: number | null }
-type DirectoryListing = { path: string; parent: string | null; entries: FileEntry[] }
+type FileEntry = { name: string; path: string; isDirectory: boolean; size: number | null; modifiedAt: number | null; videoId?: number | null }
+type DirectoryListing = { path: string; parent: string | null; entries: FileEntry[]; catalogWarning?: string }
 type TrashBatchResult = { listing: DirectoryListing; movedCount: number; error: string | null }
 type DuplicateResult = { listing: DirectoryListing; duplicatedPath: string }
 type RenameResult = { listing: DirectoryListing; renamedPath: string }
@@ -215,7 +222,7 @@ function App() {
   const [sortDirection, setSortDirection] = useState<SortDirection>(() => getPreference('framewise.sortDirection') === 'desc' ? 'desc' : 'asc')
   const [root, setRoot] = useState<string | null>(null)
   const [listing, setListing] = useState<DirectoryListing | null>(null)
-  const mediaEntries = useMemo(() => sortMedia(listing?.entries ?? [], mediaSort, sortDirection), [listing, mediaSort, sortDirection])
+  const sortedMediaEntries = useMemo(() => sortMedia(listing?.entries ?? [], mediaSort, sortDirection), [listing, mediaSort, sortDirection])
   const [selected, setSelected] = useState<FileEntry | null>(null)
   const [playbackRequest, setPlaybackRequest] = useState<{ path: string; action: 'play' | 'toggle' } | null>(null)
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
@@ -225,6 +232,9 @@ function App() {
   const [copyDone, setCopyDone] = useState(false)
   const [editingFile, setEditingFile] = useState<FileEntry | null>(null)
   const [contextMenu, setContextMenu] = useState<{ file: FileEntry; x: number; y: number } | null>(null)
+  const [tagBatch, setTagBatch] = useState<NamedTagVideo[] | null>(null)
+  const [tagRevision, setTagRevision] = useState(0)
+  const tagReturnPath = useRef<string | null>(null)
   const [fileAction, setFileAction] = useState<{ message: string; error: boolean } | null>(null)
   const [deleting, setDeleting] = useState(false)
   const trashRequestPending = useRef(false)
@@ -237,6 +247,15 @@ function App() {
   const [newFolderName, setNewFolderName] = useState('')
   const [folderBusy, setFolderBusy] = useState(false)
   const [view, setView] = useState<'media' | 'settings'>('media')
+  const [settingsTab, setSettingsTab] = useState<'settings' | 'tags'>('settings')
+  const [searchScope, setSearchScope] = useState<{ root: string | null; workspace: boolean }>({ root: null, workspace: false })
+  if (searchScope.root !== root) setSearchScope({ root, workspace: false })
+  const workspace = searchScope.root === root && searchScope.workspace
+  const tagFilter = useTagFilter(listing, root, tagRevision, view, !workspace)
+  const workspaceSearch = useWorkspaceSearch(root, workspace && view === 'media', tagFilter.ids, tagFilter.matchAll, mediaSort, sortDirection === 'desc', tagRevision, listing)
+  const resultsReady = workspace ? workspaceSearch.ready : tagFilter.ready
+  const scanRunning = workspace && workspaceSearch.scan?.status === 'running'
+  const mediaEntries = useMemo(() => workspace ? workspaceSearch.entries : filterMedia(sortedMediaEntries, tagFilter.active, tagFilter.matches), [workspace, workspaceSearch.entries, sortedMediaEntries, tagFilter.active, tagFilter.matches])
   const [theme, setTheme] = useState<'light' | 'dark'>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
   const [defaultFolder, setDefaultFolder] = useState<string | null>(() => getPreference('framewise.defaultFolder'))
   const [settingsError, setSettingsError] = useState<string | null>(null)
@@ -307,15 +326,32 @@ function App() {
     return () => { active = false }
   }, [])
 
-  useEffect(() => {
-    if (view !== 'media' || !listing || !pendingFocus.current) return
+  const focusPendingFiles = useEffectEvent(() => {
+    if (view !== 'media' || !listing || !pendingFocus.current || !resultsReady) return
     const rows = Array.from(fileListRef.current?.querySelectorAll<HTMLButtonElement>('[data-list-row]') ?? [])
     const target = pendingFocus.current.path
-      ? rows.find(row => row.dataset.path === pendingFocus.current?.path)
+      ? rows.find(row => row.dataset.path === pendingFocus.current?.path) ?? rows[0]
       : rows.find(row => row.dataset.entryIndex === '0') ?? rows[0]
     pendingFocus.current = null
     target?.focus()
-  }, [listing, view])
+    const entry = target ? mediaEntries[Number(target.dataset.entryIndex)] : null
+    if (entry && !entry.isDirectory && selected?.path !== entry.path) void selectFile(entry)
+  })
+
+  const reconcileFilteredSelection = useEffectEvent(() => {
+    if (!resultsReady) return
+    const kept = visibleSelection(selectedPaths, mediaEntries)
+    if (kept.length !== selectedPaths.length) setSelectedPaths(kept)
+    if (selected && !mediaEntries.some(entry => entry.path === selected.path)) {
+      requestId.current++; setSelected(null); setProbe(null); setError(null); setLoading(false); setPlaybackRequest(null); setContextMenu(null)
+    }
+    if (selectionAnchor.current && !mediaEntries.some(entry => entry.path === selectionAnchor.current)) selectionAnchor.current = null
+  })
+  useEffect(() => {
+    // Reconcile selection before restoring focus to the newly rendered rows.
+    const frame = requestAnimationFrame(() => { reconcileFilteredSelection(); focusPendingFiles() })
+    return () => cancelAnimationFrame(frame)
+  }, [listing, view, mediaEntries, resultsReady])
 
   useEffect(() => {
     if (!contextMenu) return
@@ -346,14 +382,14 @@ function App() {
   const availableForPanels = Math.max(viewportWidth, 760) - MIN_MEDIA_WIDTH
   const effectiveWorkspaceWidth = workspaceCollapsed
     ? COLLAPSED_WIDTH
-    : Math.max(MIN_WORKSPACE_WIDTH, Math.min(workspaceWidth, availableForPanels - (inspectorCollapsed ? COLLAPSED_WIDTH : MIN_INSPECTOR_WIDTH)))
+    : Math.max(MIN_WORKSPACE_WIDTH, Math.min(workspaceWidth, availableForPanels - (view === 'settings' ? 0 : inspectorCollapsed ? COLLAPSED_WIDTH : MIN_INSPECTOR_WIDTH)))
   const effectiveInspectorWidth = inspectorCollapsed
     ? COLLAPSED_WIDTH
     : Math.max(MIN_INSPECTOR_WIDTH, Math.min(inspectorWidth, availableForPanels - effectiveWorkspaceWidth))
 
   function widthLimits(side: PanelSide) {
     return side === 'left'
-      ? { min: MIN_WORKSPACE_WIDTH, max: availableForPanels - effectiveInspectorWidth }
+      ? { min: MIN_WORKSPACE_WIDTH, max: availableForPanels - (view === 'settings' ? 0 : effectiveInspectorWidth) }
       : { min: MIN_INSPECTOR_WIDTH, max: availableForPanels - effectiveWorkspaceWidth }
   }
 
@@ -458,7 +494,28 @@ function App() {
     setTheme(nextTheme)
   }
 
+  function openSettings() {
+    setContextMenu(null)
+    setPlaybackRequest(null)
+    setView('settings')
+  }
+  function openMedia() { setTagRevision(value => value + 1); setView('media') }
+  function changeTagFilters(ids: number[], matchAll: boolean) {
+    requestId.current++; setSelected(null); setSelectedPaths([]); setProbe(null); setError(null); setLoading(false); setPlaybackRequest(null); setContextMenu(null); selectionAnchor.current = null
+    tagFilter.change(ids, matchAll)
+  }
+  function changeSearchScope(workspace: boolean) {
+    requestId.current++; setSelected(null); setSelectedPaths([]); setProbe(null); setError(null); setLoading(false); setPlaybackRequest(null); setContextMenu(null); selectionAnchor.current = null; pendingFocus.current = null
+    setSearchScope({ root, workspace })
+  }
+  function changeSearchPage(page: number) {
+    changeTagFilters(tagFilter.ids, tagFilter.matchAll)
+    workspaceSearch.setPage(page)
+    fileListRef.current?.scrollTo({ top: 0 })
+  }
+
   async function browse(path: string, focusTarget?: { path?: string }) {
+    if (workspace) changeSearchScope(false)
     try {
       setPlaybackRequest(null)
       setContextMenu(null); setFileAction(null)
@@ -472,6 +529,7 @@ function App() {
   }
 
   function inspectFocusedVideo(directory: DirectoryListing, focusTarget: { path?: string }) {
+    if (tagFilter.active) return
     const entry = focusTarget.path
       ? directory.entries.find(item => item.path === focusTarget.path)
       : sortMedia(directory.entries, mediaSort, sortDirection)[0]
@@ -519,6 +577,11 @@ function App() {
   const refreshMovedFiles = useEffectEvent(({ count, sourceFolder, destination, directories }: MoveResult) => {
     const noun = directories ? (count === 1 ? 'folder' : 'folders') : (count === 1 ? 'video' : 'videos')
     const message = `Moved ${count} ${noun} to ${displayPath(destination)}.`
+    if (workspace) {
+      setTagRevision(value => value + 1)
+      setFileAction({ message, error: false })
+      return
+    }
     const current = listingRef.current
     if (current && (current.path === sourceFolder || current.path === destination)) {
       void browse(current.path).then(() => setFileAction({ message, error: false }))
@@ -539,7 +602,23 @@ function App() {
   function openFileMenu(file: FileEntry, x: number, y: number) {
     if (deleting || duplicatingFile || renaming || renameTarget) return
     if (!selectedPaths.includes(file.path)) { selectionAnchor.current = file.path; inspectSelection(file) }
-    setContextMenu({ file, x: Math.max(8, Math.min(x, window.innerWidth - 200)), y: Math.max(8, Math.min(y, window.innerHeight - (file.isDirectory ? 180 : 255))) })
+    setContextMenu({ file, x: Math.max(8, Math.min(x, window.innerWidth - 200)), y: Math.max(8, Math.min(y, window.innerHeight - (file.isDirectory ? 180 : 295))) })
+  }
+
+  function openVideoTags(file: FileEntry) {
+    setContextMenu(null)
+    const entries = selectedPaths.includes(file.path) ? mediaEntries.filter(entry => selectedPaths.includes(entry.path)) : [file]
+    if (!entries.length || entries.some(entry => entry.isDirectory || !entry.videoId)) {
+      setFileAction({ message: 'Refresh the folder to load organization records for every selected video before editing tags.', error: true })
+      return
+    }
+    tagReturnPath.current = file.path
+    setTagBatch(entries.map(entry => ({ videoId: entry.videoId!, path: entry.path, name: entry.name })))
+  }
+  function closeVideoTags() {
+    const path = tagReturnPath.current
+    setTagBatch(null)
+    window.requestAnimationFrame(() => { Array.from(fileListRef.current?.querySelectorAll<HTMLButtonElement>('[data-list-row]') ?? []).find(row => row.dataset.path === path)?.focus() })
   }
 
   async function showInFileManager(file: FileEntry) {
@@ -592,7 +671,12 @@ function App() {
 
   async function openMoveWindow(file: FileEntry) {
     setContextMenu(null)
+    if (scanRunning) { setFileAction({ message: 'Wait for the workspace scan to finish or cancel it before moving files.', error: true }); return }
     const paths = selectedPaths.includes(file.path) ? selectedPaths : [file.path]
+    if (!sameParent(paths)) {
+      setFileAction({ message: 'Select videos from one folder at a time for Move To. Batch tagging works across folders.', error: true })
+      return
+    }
     try {
       const existing = await WebviewWindow.getByLabel('move-to')
       if (existing) { await existing.setFocus(); return }
@@ -603,6 +687,7 @@ function App() {
   }
 
   function editFile(file: FileEntry) {
+    if (scanRunning) return
     setContextMenu(null)
     setEditingFile(file)
   }
@@ -613,6 +698,7 @@ function App() {
   }
 
   async function duplicateFile(file: FileEntry) {
+    if (scanRunning) return
     setContextMenu(null)
     setFileAction(null)
     setDuplicatingFile(file.name)
@@ -632,6 +718,7 @@ function App() {
   }
 
   function openRename(file: FileEntry) {
+    if (scanRunning) return
     setContextMenu(null)
     setRenameTarget(file)
     setRenameStem(editableName(file))
@@ -673,11 +760,17 @@ function App() {
   }
 
   async function moveEntryToTrash(file: FileEntry) {
+    if (scanRunning) { setFileAction({ message: 'Wait for the workspace scan to finish or cancel it before deleting files.', error: true }); return }
     if (trashRequestPending.current || deleting || duplicatingFile || renaming || renameTarget || folderBusy) return
     trashRequestPending.current = true
     setContextMenu(null)
     const paths = file.isDirectory ? [] : selectedPaths.includes(file.path) ? selectedPaths : [file.path]
     const count = paths.length
+    if (!sameParent(paths)) {
+      trashRequestPending.current = false
+      setFileAction({ message: 'Select videos from one folder at a time to move them to Trash. Batch tagging works across folders.', error: true })
+      return
+    }
     try {
       const approved = await ask(file.isDirectory
         ? `Move folder “${file.name}” and everything inside it to Trash? You can restore it from your system's Trash or Recycle Bin.`
@@ -696,7 +789,9 @@ function App() {
       if (currentRequest !== requestId.current) return
       const next = result.listing
       const oldIndex = mediaEntries.findIndex(entry => entry.path === file.path)
-      const nextEntries = sortMedia(next.entries, mediaSort, sortDirection)
+      const nextEntries = workspace
+        ? mediaEntries.filter(entry => parentPath(entry.path) !== next.path || next.entries.some(remaining => remaining.path === entry.path))
+        : filterMedia(sortMedia(next.entries, mediaSort, sortDirection), tagFilter.active, tagFilter.matches)
       const remaining = result.error ? nextEntries.filter(entry => paths.includes(entry.path)) : []
       const nearby = remaining[0] ?? nextEntries[Math.min(Math.max(oldIndex, 0), nextEntries.length - 1)]
       pendingFocus.current = nearby ? { path: nearby.path } : null
@@ -714,7 +809,7 @@ function App() {
       setFileAction({ message: reportError(file.isDirectory ? 'Moving folder to Trash' : 'Moving video to Trash', cause), error: true })
       if (listing) {
         try {
-          const refreshed = await invoke<DirectoryListing>('list_directory', { path: listing.path })
+          const refreshed = await invoke<DirectoryListing>('list_directory', { path: workspace ? parentPath(file.path) : listing.path })
           setListing(refreshed)
           setSelectedPaths(paths.filter(path => refreshed.entries.some(entry => entry.path === path)))
         } catch (refreshCause) { reportError('Refreshing folder after Trash error', refreshCause) }
@@ -781,7 +876,7 @@ function App() {
     const file = editingFile
     setEditingFile(null)
     if (!result || !listing || !file) return
-    await browse(listing.path, { path: file.path })
+    await browse(workspace ? parentPath(file.path) : listing.path, { path: file.path })
     const metadataNote = result.metadataWarnings.length > 0
       ? ` Track metadata changed: ${result.metadataWarnings.join('; ')}.`
       : ''
@@ -796,7 +891,7 @@ function App() {
   async function savedEditing(result: EditResult) {
     const file = editingFile
     if (!listing || !file) return
-    await browse(listing.path, { path: file.path })
+    await browse(workspace ? parentPath(file.path) : listing.path, { path: file.path })
     const metadataNote = result.metadataWarnings.length > 0
       ? ` Track metadata changed: ${result.metadataWarnings.join('; ')}.`
       : ''
@@ -806,8 +901,9 @@ function App() {
   const video = probe?.streams?.find(stream => stream.codec_type === 'video')
   const audio = probe?.streams?.find(stream => stream.codec_type === 'audio')
   const pathParts = listing?.path.split(/[\\/]/).filter(Boolean) ?? []
-  const directoryCount = listing?.entries.filter(entry => entry.isDirectory).length ?? 0
-  const videoCount = listing?.entries.length ? listing.entries.length - directoryCount : 0
+  const directoryCount = workspace ? 0 : listing?.entries.filter(entry => entry.isDirectory).length ?? 0
+  const totalVideoCount = workspace ? workspaceSearch.totalVideos : listing?.entries.length ? listing.entries.length - directoryCount : 0
+  const videoCount = mediaEntries.filter(entry => !entry.isDirectory).length
 
   if (editingFile) return <Editor file={editingFile} onExit={(result, replace) => { void finishEditing(result, replace) }} onSaved={result => { void savedEditing(result) }} />
 
@@ -818,23 +914,23 @@ function App() {
       <button className="choose-button" onClick={chooseFolder}><Icon name="folder" size={17} /> Choose folder</button>
     </header>
 
-    <div className={`workspace ${workspaceCollapsed ? 'left-collapsed' : ''} ${inspectorCollapsed ? 'right-collapsed' : ''} ${resizing ? 'resizing' : ''}`} style={{ '--left-width': `${effectiveWorkspaceWidth}px`, '--right-width': `${effectiveInspectorWidth}px` } as CSSProperties}>
+    <div className={`workspace ${view === 'settings' ? 'settings-view' : ''} ${workspaceCollapsed ? 'left-collapsed' : ''} ${inspectorCollapsed ? 'right-collapsed' : ''} ${resizing ? 'resizing' : ''}`} style={{ '--left-width': `${effectiveWorkspaceWidth}px`, '--right-width': `${effectiveInspectorWidth}px` } as CSSProperties}>
       <aside className={`sidebar ${workspaceCollapsed ? 'collapsed' : ''}`} aria-label="Workspace">
         <div className="sidebar-heading">
           {!workspaceCollapsed && <span>WORKSPACE</span>}
           <button className="panel-toggle workspace-toggle" onClick={toggleWorkspace} aria-label={workspaceCollapsed ? 'Expand workspace' : 'Collapse workspace'} aria-expanded={!workspaceCollapsed} title={workspaceCollapsed ? 'Expand workspace' : 'Collapse workspace'}><Icon name="chevron" size={17} /></button>
         </div>
         {workspaceCollapsed
-          ? <button className={`rail-icon media-rail ${view === 'media' ? 'active' : ''}`} onClick={() => setView('media')} title="Your media" aria-label="Your media"><Icon name="film" size={20} /></button>
-          : <button className={`sidebar-media ${view === 'media' ? 'active' : ''}`} onClick={() => setView('media')}><Icon name="film" size={18} /> Your media</button>}
+          ? <button className={`rail-icon media-rail ${view === 'media' ? 'active' : ''}`} onClick={openMedia} title="Your media" aria-label="Your media"><Icon name="film" size={20} /></button>
+          : <button className={`sidebar-media ${view === 'media' ? 'active' : ''}`} onClick={openMedia}><Icon name="film" size={18} /> Your media</button>}
         {workspaceCollapsed ? root && <button className="rail-icon" onClick={() => browse(root, {})} title="Go to selected folder" aria-label="Go to selected folder"><Icon name="folder" size={20} /></button> : root ? <>
           <button className="root-item" onClick={() => browse(root, {})} title={displayPath(root)}><Icon name="folder" size={19} /><span>{root.split(/[\\/]/).filter(Boolean).at(-1) || displayPath(root)}</span></button>
           <div className="sidebar-section-label">CURRENT FOLDER</div>
           <div className="sidebar-current" title={listing ? displayPath(listing.path) : undefined}>{listing && displayPath(listing.path)}</div>
         </> : <div className="sidebar-hint">Choose a folder to see your videos here.</div>}
         {workspaceCollapsed
-          ? <button className={`rail-icon settings-rail ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')} title="Settings" aria-label="Settings"><Icon name="settings" size={20} /></button>
-          : <button className={`sidebar-settings ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}><Icon name="settings" size={18} /> Settings</button>}
+          ? <button className={`rail-icon settings-rail ${view === 'settings' ? 'active' : ''}`} onClick={openSettings} title="Settings" aria-label="Settings"><Icon name="settings" size={20} /></button>
+          : <button className={`sidebar-settings ${view === 'settings' ? 'active' : ''}`} onClick={openSettings}><Icon name="settings" size={18} /> Settings</button>}
         {!workspaceCollapsed && <div className="sidebar-bottom"><span className="status-dot" /> Files stay on your device</div>}
       </aside>
 
@@ -843,8 +939,21 @@ function App() {
           <div className="content-heading">
             <div className="eyebrow">PREFERENCES</div>
             <h1>Settings</h1>
-            <p>Choose how Framewise looks and starts on this computer.</p>
+            <p>Manage your tags and choose how Framewise looks and starts.</p>
           </div>
+          <div className="settings-tabs" role="tablist" aria-label="Settings sections" onKeyDown={event => {
+            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+            if (!(event.target instanceof HTMLElement) || event.target.getAttribute('role') !== 'tab') return
+            event.preventDefault()
+            const next = event.key === 'Home' ? 'settings' : event.key === 'End' ? 'tags' : settingsTab === 'settings' ? 'tags' : 'settings'
+            setSettingsTab(next)
+            event.currentTarget.closest('main')?.scrollTo({ top: 0 })
+            event.currentTarget.querySelector<HTMLButtonElement>(`#${next}-tab`)?.focus()
+          }}>
+            {(['settings', 'tags'] as const).map(tab => <button key={tab} id={`${tab}-tab`} role="tab" aria-selected={settingsTab === tab} aria-controls={`${tab}-tab-panel`} tabIndex={settingsTab === tab ? 0 : -1} onClick={event => { setSettingsTab(tab); event.currentTarget.closest('main')?.scrollTo({ top: 0 }) }}>{tab === 'settings' ? 'Settings' : 'Tags'}</button>)}
+          </div>
+          <div id="tags-tab-panel" role="tabpanel" aria-labelledby="tags-tab" hidden={settingsTab !== 'tags'}><TagSettings /></div>
+          <div id="settings-tab-panel" role="tabpanel" aria-labelledby="settings-tab" hidden={settingsTab !== 'settings'}>
           <section className="settings-card" aria-labelledby="appearance-heading">
             <div className="settings-card-heading"><div className="settings-card-icon"><Icon name="sun" size={22} /></div><div><h2 id="appearance-heading">Appearance</h2><p>Choose the color theme for Framewise.</p></div></div>
             <div className="theme-options" role="radiogroup" aria-labelledby="appearance-heading">
@@ -881,6 +990,7 @@ function App() {
             {previewIndexError && <div className="settings-error" role="alert"><Icon name="info" size={18} /><span>{previewIndexError}</span></div>}
             <p className="settings-footnote">Framewise keeps preview images in <code>.framewise/previews</code> and their video associations in <code>.framewise/framewise.db</code>. Images can be regenerated if deleted.</p>
           </section>
+          </div>
         </> : <>
         <div className="content-heading">
           <div className="eyebrow">YOUR MEDIA</div>
@@ -896,11 +1006,20 @@ function App() {
           <div className="supported">MP4 · MOV · MKV · WebM · AVI and more</div>
         </div> : <>
           <div className="breadcrumb"><button onClick={() => root && browse(root, {})}>{root?.split(/[\\/]/).filter(Boolean).at(-1) || 'Root'}</button>{listing.path !== root && <><Icon name="chevron" size={14} /><span>{pathParts.at(-1)}</span></>}</div>
-          <div className="browser-toolbar"><span>{directoryCount} {directoryCount === 1 ? 'folder' : 'folders'} <span className="dot-separator">·</span> {videoCount} {videoCount === 1 ? 'video' : 'videos'}{selectedPaths.length > 1 && <> <span className="dot-separator">·</span> {selectedPaths.length} selected</>}</span><div className="browser-toolbar-actions"><button className="browser-new-folder" onClick={() => setCreatingFolder(true)} disabled={folderBusy || creatingFolder}>+ New folder</button><button title="Refresh folder" aria-label="Refresh folder" onClick={() => browse(listing.path, selected ? { path: selected.path } : {})}><Icon name="refresh" size={17} /></button></div></div>
+          <TagFilter filter={tagFilter} count={workspace ? workspaceSearch.total : videoCount} total={totalVideoCount} onChange={changeTagFilters} workspace={workspace} onScopeChange={changeSearchScope} ready={resultsReady} />
+          {workspace && <div className="workspace-discovery">
+            <div className="workspace-scan-actions"><span role="status">{scanRunning ? 'Scanning workspace…' : workspaceSearch.scan?.status === 'complete' ? 'Scan complete' : workspaceSearch.scan?.status === 'cancelled' ? 'Scan cancelled — results may be incomplete' : 'Workspace catalog'} · {workspaceSearch.scan?.folders ?? 0} folders · {workspaceSearch.scan?.videos ?? 0} videos discovered</span><button onClick={scanRunning ? workspaceSearch.cancel : workspaceSearch.rescan}>{scanRunning ? 'Cancel scan' : 'Scan workspace'}</button></div>
+            {scanRunning && <><progress aria-label="Scanning workspace" /><p title={displayPath(workspaceSearch.scan!.currentFolder)}>{displayPath(workspaceSearch.scan!.currentFolder)}</p><p>File changes and tag assignments are available when scanning finishes.</p></>}
+            {workspaceSearch.scan?.message && <p role="status">{workspaceSearch.scan.warnings > 0 && `${workspaceSearch.scan.warnings} folder(s) skipped. `}{workspaceSearch.scan.message}</p>}
+            {(workspaceSearch.scanError || workspaceSearch.error) && <p role="alert">{workspaceSearch.scanError || workspaceSearch.error}</p>}
+            <p>Results show catalogued videos, including previously discovered files. Scan to refresh files added or removed outside Framewise.</p>
+          </div>}
+          <div className="browser-toolbar"><span>{workspace ? 'Workspace results' : `${directoryCount} ${directoryCount === 1 ? 'folder' : 'folders'}`} <span className="dot-separator">·</span> {!resultsReady ? 'Loading results…' : `${videoCount} ${videoCount === 1 ? 'video' : 'videos'}${workspace ? ' on this page' : ''}`}{selectedPaths.length > 1 && <> <span className="dot-separator">·</span> {selectedPaths.length} selected</>}</span><div className="browser-toolbar-actions">{!workspace && <button className="browser-new-folder" onClick={() => setCreatingFolder(true)} disabled={folderBusy || creatingFolder}>+ New folder</button>}<button title={workspace ? 'Refresh workspace results' : 'Refresh folder'} aria-label={workspace ? 'Refresh workspace results' : 'Refresh folder'} onClick={() => workspace ? setTagRevision(value => value + 1) : browse(listing.path, selected ? { path: selected.path } : {})}><Icon name="refresh" size={17} /></button></div></div>
           {creatingFolder && <form className="browser-create-folder" onSubmit={event => { event.preventDefault(); void createMediaFolder() }}><input autoFocus aria-label="New folder name" placeholder="New folder name" value={newFolderName} onChange={event => setNewFolderName(event.target.value)} disabled={folderBusy} /><button type="submit" disabled={folderBusy || !newFolderName.trim()}>{folderBusy ? 'Creating…' : 'Create'}</button><button type="button" onClick={() => { setCreatingFolder(false); setNewFolderName('') }} disabled={folderBusy}>Cancel</button></form>}
           {duplicatingFile && <div className="file-action progress" role="status">Duplicating “{duplicatingFile}”…</div>}
           {deleting && <div className="file-action progress" role="status">Moving to Trash…</div>}
           {fileAction && <div className={`file-action ${fileAction.error ? 'error' : ''}`} role={fileAction.error ? 'alert' : 'status'}>{fileAction.message}</div>}
+          {listing.catalogWarning && <div className="file-action error" role="alert">{listing.catalogWarning}</div>}
           <div className="media-view-switch" role="group" aria-label="File view">
             <label className="media-sort">Sort by <select value={mediaSort} onChange={event => { const value = event.target.value as MediaSort; setMediaSort(value); setPreference('framewise.mediaSort', value) }}><option value="name">Filename</option><option value="modified">Date modified</option></select></label>
             <label className="media-sort"><span className="sort-order-label">Order</span><select aria-label="Sort order" value={sortDirection} onChange={event => { const value = event.target.value as SortDirection; setSortDirection(value); setPreference('framewise.sortDirection', value) }}><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
@@ -908,32 +1027,37 @@ function App() {
             {mediaView === 'grid' && <label className="media-sort">Preview size <select value={gridSize} onChange={event => { const value = event.target.value as typeof gridSize; setGridSize(value); setPreference('framewise.gridSize', value) }}><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select></label>}
           </div>
           <div ref={fileListRef} className={`file-list ${mediaView === 'grid' ? `media-grid grid-size-${gridSize}` : ''}`} role="group" aria-label="Files and folders" onKeyDown={navigateFiles}>
-            {listing.parent && <button className="file-row back-row" data-list-row="true" data-entry-index="-1" data-path={listing.parent} onClick={() => browse(listing.parent!, { path: listing.path })}><span className="file-icon"><Icon name="arrow" size={18} /></span><span className="file-name">Go back</span></button>}
+            {!workspace && listing.parent && <button className="file-row back-row" data-list-row="true" data-entry-index="-1" data-path={listing.parent} onClick={() => browse(listing.parent!, { path: listing.path })}><span className="file-icon"><Icon name="arrow" size={18} /></span><span className="file-name">Go back</span></button>}
             {mediaEntries.map((entry, index) => <button key={entry.path} data-list-row="true" data-entry-index={index} data-path={entry.path} aria-pressed={selectedPaths.includes(entry.path)} className={`file-row ${selectedPaths.includes(entry.path) ? 'selected' : ''}`} onClick={event => selectMediaEntry(entry, index, event)} onDoubleClick={() => playMediaEntry(entry)} onContextMenu={event => fileContextMenu(event, entry)}>
               {mediaView === 'grid' && !entry.isDirectory
-                ? <MediaThumbnail path={entry.path} revision={listing} placeholder={<Icon name="film" size={32} />} />
+                ? <MediaThumbnail path={entry.path} revision={workspace ? workspaceSearch.thumbnailRevision : listing} placeholder={<Icon name="film" size={32} />} />
                 : <span className={`file-icon ${entry.isDirectory ? 'folder-icon' : 'video-icon'}`}><Icon name={entry.isDirectory ? 'folder' : 'film'} size={mediaView === 'grid' ? 32 : 19} /></span>}
               <span className="file-name" title={entry.name}>{entry.name}</span>
+              {workspace && <span className="result-location" title={displayPath(parentPath(entry.path))}>{displayPath(parentPath(entry.path).slice(root!.replace(/[\\/]$/, '').length).replace(/^[\\/]/, '')) || 'Workspace root'}</span>}
               <span className="file-kind">{entry.isDirectory ? 'Folder' : fileSize(entry.size)}</span>
               <Icon name="chevron" size={16} />
             </button>)}
-            {listing.entries.length === 0 && <div className="empty-list">No folders or supported video files here.</div>}
-            {(listing.parent || listing.entries.length > 0) && <div className="file-list-tip">Tip: Ctrl-click (⌘-click on Mac) or Shift-click to select several videos or folders. Right-click a selection to move it. A normal click opens a folder.</div>}
+            {resultsReady && videoCount === 0 && (workspace || tagFilter.active) ? <div className="empty-list">{workspaceSearch.error && workspace ? 'Workspace results are unavailable.' : tagFilter.error ? 'Tag results are unavailable. Clear filters to browse all videos.' : workspace ? 'No catalogued videos match in this workspace.' : 'No videos match these tags in this folder.'} {tagFilter.active && <button className="clear-tag-empty" onClick={() => changeTagFilters([], tagFilter.matchAll)}>Clear filters</button>}</div> : !workspace && listing.entries.length === 0 && <div className="empty-list">No folders or supported video files here.</div>}
+            {(listing.parent || listing.entries.length > 0) && <div className="file-list-tip">Tip: Ctrl-click (⌘-click on Mac) or Shift-click to select several videos or folders. Right-click selected videos to edit their tags together. A normal click opens a folder.</div>}
           </div>
+          {workspace && workspaceSearch.total > 200 && <div className="workspace-pagination" aria-label="Workspace result pages"><button disabled={!resultsReady || workspaceSearch.page === 0} onClick={() => changeSearchPage(workspaceSearch.page - 1)}>Previous</button><span>Page {workspaceSearch.page + 1} of {Math.ceil(workspaceSearch.total / 200)} · {workspaceSearch.total} results</span><button disabled={!resultsReady || (workspaceSearch.page + 1) * 200 >= workspaceSearch.total} onClick={() => changeSearchPage(workspaceSearch.page + 1)}>Next</button></div>}
         </>}
         </>}
       </main>
 
-      <section className={`details-panel ${inspectorCollapsed ? 'collapsed' : ''}`} aria-label="Video metadata">
+      {view === 'media' && <section className={`details-panel ${inspectorCollapsed ? 'collapsed' : ''}`} aria-label="Video metadata">
         <div className="details-top">
           {!inspectorCollapsed && <div><div className="eyebrow">INSPECTOR</div><h2>File details</h2></div>}
           <div className="details-actions">{!inspectorCollapsed && probe && <button className="icon-button" onClick={copyMetadata} title="Copy raw metadata" aria-label="Copy raw metadata"><Icon name={copyDone ? 'check' : 'copy'} size={17} /></button>}
           <button className="panel-toggle inspector-toggle" onClick={toggleInspector} aria-label={inspectorCollapsed ? 'Expand inspector' : 'Collapse inspector'} aria-expanded={!inspectorCollapsed} title={inspectorCollapsed ? 'Expand inspector' : 'Collapse inspector'}><Icon name="chevron" size={17} /></button></div>
         </div>
-        {!inspectorCollapsed && (selected ? <div key={selected.path} className="details-body">
+        {!inspectorCollapsed && (selected && resultsReady && mediaEntries.some(entry => entry.path === selected.path) ? <div key={selected.path} className="details-body">
           <VideoPreview file={selected} playbackAction={playbackRequest?.path === selected.path ? playbackRequest.action : null} onPlayRequestHandled={() => setPlaybackRequest(null)} />
           <div className="selected-file"><span className="selected-file-icon"><Icon name="film" size={27} /></span><div><strong title={selected.name}>{selected.name}</strong><span>{fileSize(selected.size)}</span></div></div>
-          {probe && video && <button className="inspector-edit" onClick={() => editFile(selected)}>Edit video</button>}
+          {probe && video && <button className="inspector-edit" disabled={scanRunning} onClick={() => editFile(selected)}>Edit video</button>}
+          <section aria-label="Video tags"><div className="section-title">TAGS</div>{selected.videoId
+            ? <VideoTags key={`${selected.path}:${selected.videoId}`} videos={[{ videoId: selected.videoId, path: selected.path }]} refreshToken={tagRevision} onChanged={() => setTagRevision(value => value + 1)} />
+            : <p className="no-data">Refresh the folder to load this video's organization record before assigning tags.</p>}</section>
           {loading && <div className="notice">Reading video metadata…</div>}
           {error && <div className="notice error" role="alert"><Icon name="info" size={18} /><span>{error}</span><button onClick={() => setError(null)} aria-label="Dismiss error"><Icon name="close" size={15} /></button></div>}
           {probe && <>
@@ -949,24 +1073,27 @@ function App() {
             <details className="raw-details"><summary>View raw metadata</summary><pre>{JSON.stringify(probe, null, 2)}</pre></details>
           </>}
         </div> : <div className="details-empty"><div className="details-empty-icon"><Icon name="info" size={27} /></div><h3>Nothing selected</h3><p>Choose a video from the browser to see its metadata here.</p>{error && <div className="notice error" role="alert">{error}</div>}</div>)}
-      </section>
+      </section>}
       {!workspaceCollapsed && <div className="column-resizer left-resizer" role="separator" tabIndex={0} aria-label="Resize workspace column" aria-orientation="vertical" aria-valuemin={MIN_WORKSPACE_WIDTH} aria-valuemax={widthLimits('left').max} aria-valuenow={effectiveWorkspaceWidth} onPointerDown={event => startResize('left', event)} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize} onKeyDown={event => resizeWithKeyboard('left', event)} />}
-      {!inspectorCollapsed && <div className="column-resizer right-resizer" role="separator" tabIndex={0} aria-label="Resize inspector column" aria-orientation="vertical" aria-valuemin={MIN_INSPECTOR_WIDTH} aria-valuemax={widthLimits('right').max} aria-valuenow={effectiveInspectorWidth} onPointerDown={event => startResize('right', event)} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize} onKeyDown={event => resizeWithKeyboard('right', event)} />}
+      {view === 'media' && !inspectorCollapsed && <div className="column-resizer right-resizer" role="separator" tabIndex={0} aria-label="Resize inspector column" aria-orientation="vertical" aria-valuemin={MIN_INSPECTOR_WIDTH} aria-valuemax={widthLimits('right').max} aria-valuenow={effectiveInspectorWidth} onPointerDown={event => startResize('right', event)} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize} onKeyDown={event => resizeWithKeyboard('right', event)} />}
     </div>
     {contextMenu && <div ref={contextMenuRef} className="file-context-menu" role="menu" aria-label={`Actions for ${contextMenu.file.name}`} style={{ left: contextMenu.x, top: contextMenu.y }}>
+      {workspace && <button role="menuitem" onClick={() => { setContextMenu(null); void browse(parentPath(contextMenu.file.path), { path: contextMenu.file.path }) }}>Open containing folder</button>}
       <button className="reveal-menu-item" role="menuitem" onClick={() => void showInFileManager(contextMenu.file)}>{/Win/i.test(navigator.platform) ? 'Show in Explorer' : /Mac/i.test(navigator.platform) ? 'Show in Finder' : 'Show in File Manager'}</button>
       {contextMenu.file.isDirectory ? <>
-        <button className="rename-menu-item" role="menuitem" onClick={() => openRename(contextMenu.file)}>Rename folder</button>
-        <button className="move-menu-item" role="menuitem" onClick={() => void openMoveWindow(contextMenu.file)}>Move to…{selectedPaths.includes(contextMenu.file.path) && selectedPaths.length > 1 ? ` (${selectedPaths.length})` : ''}</button>
-        <button role="menuitem" onClick={() => void moveEntryToTrash(contextMenu.file)}>Move folder to Trash</button>
+        <button className="rename-menu-item" role="menuitem" disabled={scanRunning} onClick={() => openRename(contextMenu.file)}>Rename folder</button>
+        <button className="move-menu-item" role="menuitem" disabled={scanRunning} onClick={() => void openMoveWindow(contextMenu.file)}>Move to…{selectedPaths.includes(contextMenu.file.path) && selectedPaths.length > 1 ? ` (${selectedPaths.length})` : ''}</button>
+        <button role="menuitem" disabled={scanRunning} onClick={() => void moveEntryToTrash(contextMenu.file)}>Move folder to Trash</button>
       </> : <>
-        <button className="edit-menu-item" role="menuitem" onClick={() => editFile(contextMenu.file)}>Edit video</button>
-        <button className="rename-menu-item" role="menuitem" onClick={() => openRename(contextMenu.file)}>Rename</button>
-        <button className="move-menu-item" role="menuitem" onClick={() => void openMoveWindow(contextMenu.file)}>Move to…{selectedPaths.includes(contextMenu.file.path) && selectedPaths.length > 1 ? ` (${selectedPaths.length})` : ''}</button>
-        <button className="duplicate-menu-item" role="menuitem" onClick={() => void duplicateFile(contextMenu.file)}>Duplicate</button>
-        <button role="menuitem" onClick={() => void moveEntryToTrash(contextMenu.file)}>{selectedPaths.includes(contextMenu.file.path) && selectedPaths.length > 1 ? `Move ${selectedPaths.length} videos to Trash` : 'Move to Trash'}</button>
+        <button className="edit-menu-item" role="menuitem" disabled={scanRunning} onClick={() => editFile(contextMenu.file)}>Edit video</button>
+        <button className="edit-menu-item" role="menuitem" disabled={scanRunning} onClick={() => openVideoTags(contextMenu.file)}>Edit tags…{selectedPaths.includes(contextMenu.file.path) && selectedPaths.length > 1 ? ` (${selectedPaths.length})` : ''}</button>
+        <button className="rename-menu-item" role="menuitem" disabled={scanRunning} onClick={() => openRename(contextMenu.file)}>Rename</button>
+        <button className="move-menu-item" role="menuitem" disabled={scanRunning} onClick={() => void openMoveWindow(contextMenu.file)}>Move to…{selectedPaths.includes(contextMenu.file.path) && selectedPaths.length > 1 ? ` (${selectedPaths.length})` : ''}</button>
+        <button className="duplicate-menu-item" role="menuitem" disabled={scanRunning} onClick={() => void duplicateFile(contextMenu.file)}>Duplicate</button>
+        <button role="menuitem" disabled={scanRunning} onClick={() => void moveEntryToTrash(contextMenu.file)}>{selectedPaths.includes(contextMenu.file.path) && selectedPaths.length > 1 ? `Move ${selectedPaths.length} videos to Trash` : 'Move to Trash'}</button>
       </>}
     </div>}
+    {tagBatch && <TagBatchDialog videos={tagBatch} onChanged={() => setTagRevision(value => value + 1)} onClose={closeVideoTags} />}
     {renameTarget && <div className="rename-backdrop">
       <form className="rename-dialog" role="dialog" aria-modal="true" aria-labelledby="rename-title" onSubmit={event => { event.preventDefault(); void renameFile() }} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); closeRename() } }}>
         <h2 id="rename-title">Rename {renameTarget.isDirectory ? 'folder' : 'video'}</h2>

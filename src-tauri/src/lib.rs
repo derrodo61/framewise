@@ -7,6 +7,11 @@ mod rename;
 mod move_files;
 mod preferences;
 mod preview_index;
+mod database;
+mod catalog;
+mod catalog_operations;
+mod tags;
+mod workspace_search;
 #[cfg(desktop)]
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
@@ -21,6 +26,9 @@ struct FileEntry {
     is_directory: bool,
     size: Option<u64>,
     modified_at: Option<u64>,
+    video_id: Option<i64>,
+    #[serde(skip)]
+    modified_ns: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -29,6 +37,8 @@ struct DirectoryListing {
     path: String,
     parent: Option<String>,
     entries: Vec<FileEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    catalog_warning: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -78,7 +88,7 @@ fn select_root(path: String, state: tauri::State<'_, AppState>) -> Result<Direct
         return Err("The selected path is not a folder".into());
     }
     *state.0.lock().map_err(|_| "App state is unavailable".to_string())? = Some(root.clone());
-    list_folder(&root, &root)
+    list_folder(&root, &root).map(register_browsed_videos)
 }
 
 fn list_folder(path: &Path, root: &Path) -> Result<DirectoryListing, String> {
@@ -96,6 +106,9 @@ fn list_folder(path: &Path, root: &Path) -> Result<DirectoryListing, String> {
             name: item.file_name().to_string_lossy().into_owned(),
             path: path.to_string_lossy().into_owned(),
             is_directory: file_type.is_dir(),
+            video_id: None,
+            modified_ns: metadata.as_ref().and_then(|metadata| metadata.modified().ok())
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok()).map(|duration| duration.as_nanos().to_string()),
             size: if file_type.is_file() { metadata.as_ref().map(|metadata| metadata.len()) } else { None },
             modified_at: metadata.and_then(|metadata| metadata.modified().ok())
                 .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
@@ -107,6 +120,7 @@ fn list_folder(path: &Path, root: &Path) -> Result<DirectoryListing, String> {
         path: path.to_string_lossy().into_owned(),
         parent: if path == root { None } else { path.parent().map(|parent| parent.to_string_lossy().into_owned()) },
         entries,
+        catalog_warning: None,
     })
 }
 
@@ -117,7 +131,28 @@ fn list_directory(path: String, state: tauri::State<'_, AppState>) -> Result<Dir
     if !resolved.is_dir() {
         return Err("The selected path is not a folder".into());
     }
-    list_folder(&resolved, &root)
+    list_folder(&resolved, &root).map(register_browsed_videos)
+}
+
+fn register_browsed_videos(mut listing: DirectoryListing) -> DirectoryListing {
+    if let Err(error) = catalog_operations::recover_pending() {
+        log::error!("Catalog discovery deferred until operation recovery: {error}");
+        listing.catalog_warning = Some(format!("Organization records need attention: {error}"));
+        return listing;
+    }
+    let present: Vec<_> = listing.entries.iter().filter(|entry| !entry.is_directory).map(|entry| entry.path.clone()).collect();
+    let observed: Vec<_> = listing.entries.iter().filter(|entry| !entry.is_directory).filter_map(|entry| Some(catalog::ObservedVideo {
+        path: entry.path.clone(), name: entry.name.clone(), size: entry.size?, modified_ns: entry.modified_ns.clone()?,
+    })).collect();
+    match catalog::register_folder(Path::new(&listing.path), &present, &observed) {
+        Ok(ids) => { for entry in &mut listing.entries { entry.video_id = ids.get(&entry.path).copied(); } }
+        Err(error) => { log::error!("Could not register browsed videos: {error}"); listing.catalog_warning = Some(format!("Organization records could not be updated: {error}")); }
+    }
+    listing
+}
+
+pub(crate) fn catalogued_folder(path: &Path, root: &Path) -> Result<DirectoryListing, String> {
+    list_folder(path, root).map(register_browsed_videos)
 }
 
 #[tauri::command]
@@ -160,8 +195,9 @@ async fn move_videos_to_trash(paths: Vec<String>, state: tauri::State<'_, AppSta
     }
     let parent = parent.ok_or("Cannot find the videos' folder")?;
     tauri::async_runtime::spawn_blocking(move || {
+        let operation = catalog_operations::Operation::begin(catalog_operations::Action::Trash, files.clone(), vec![None; files.len()])?;
         let preview_names: Vec<_> = files.iter().map(|file| thumbnail_name(file)).collect();
-        let error = trash::delete_all(&files).err().map(|cause| {
+        let mut error = trash::delete_all(&files).err().map(|cause| {
             log::error!("Could not move every video to Trash: {cause}");
             format!("Could not move every video to Trash: {cause}")
         });
@@ -172,13 +208,14 @@ async fn move_videos_to_trash(paths: Vec<String>, state: tauri::State<'_, AppSta
                 forget_video_preview(file, preview_name.as_deref());
             }
         }
-        let listing = list_folder(&parent, &root)?;
+        if let Err(cause) = operation.finish() { error = Some(match error { Some(original) => format!("{original} {cause}"), None => cause }); }
+        let listing = catalogued_folder(&parent, &root)?;
         Ok(TrashBatchResult { listing, moved_count, error })
     }).await.map_err(|error| format!("Trash operation failed: {error}"))?
 }
 
 #[tauri::command]
-fn move_folder_to_trash(path: String, state: tauri::State<'_, AppState>) -> Result<DirectoryListing, String> {
+async fn move_folder_to_trash(path: String, state: tauri::State<'_, AppState>) -> Result<DirectoryListing, String> {
     let file_type = fs::symlink_metadata(&path)
         .map_err(|error| format!("Cannot open folder: {error}"))?
         .file_type();
@@ -190,14 +227,16 @@ fn move_folder_to_trash(path: String, state: tauri::State<'_, AppState>) -> Resu
     if resolved == root {
         return Err("The selected media folder cannot be moved to Trash.".into());
     }
-    let preview_names = video_preview_names_in_folder(&resolved);
-    let parent = resolved.parent().ok_or("Cannot find the folder's parent")?;
-    trash::delete(&resolved).map_err(|error| {
-        log::error!("Could not move folder to Trash: {error}");
-        format!("Could not move folder to Trash: {error}")
-    })?;
-    forget_folder_previews(&resolved, &preview_names);
-    list_folder(parent, &root)
+    tauri::async_runtime::spawn_blocking(move || {
+        let operation = catalog_operations::Operation::begin(catalog_operations::Action::Trash, vec![resolved.clone()], vec![None])?;
+        let preview_names = video_preview_names_in_folder(&resolved);
+        let parent = resolved.parent().ok_or("Cannot find the folder's parent")?;
+        let result = trash::delete(&resolved);
+        operation.finish()?;
+        result.map_err(|error| format!("Could not move folder to Trash: {error}"))?;
+        forget_folder_previews(&resolved, &preview_names);
+        catalogued_folder(parent, &root)
+    }).await.map_err(|error| format!("Folder Trash task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -699,14 +738,18 @@ pub fn run() {
             } else if let Err(error) = migrate_preview_cache(app.handle()) {
                 log::warn!("Could not migrate previous preview cache: {error}");
             }
-            if let Err(error) = preview_index::initialize() {
-                log::error!("Could not prepare preview index: {error}");
+            if let Err(error) = database::initialize() {
+                log::error!("Could not prepare Framewise database: {error}");
+            }
+            if let Err(error) = catalog_operations::recover_pending() {
+                log::error!("Could not recover pending catalog updates: {error}");
             }
             Ok(())
         })
         .manage(AppState::default())
+        .manage(workspace_search::ScanState::default())
         .manage(move_files::MoveState::default())
-        .invoke_handler(tauri::generate_handler![select_root, list_directory, reveal_in_file_manager, move_videos_to_trash, move_folder_to_trash, duplicate::duplicate_video, rename::rename_video, rename::rename_folder, move_files::begin_move, move_files::move_session, move_files::list_move_directory, move_files::create_move_folder, move_files::create_media_folder, move_files::move_selected, preferences::load_preferences, preferences::save_preferences, inspect_video, prepare_preview, generate_preview_thumbnail, preview_cache_directory, preview_index_location, editor::prepare_edit, editor::video_frame_times, editor::export::export_edit])
+        .invoke_handler(tauri::generate_handler![select_root, list_directory, reveal_in_file_manager, move_videos_to_trash, move_folder_to_trash, duplicate::duplicate_video, rename::rename_video, rename::rename_folder, move_files::begin_move, move_files::move_session, move_files::list_move_directory, move_files::create_move_folder, move_files::create_media_folder, move_files::move_selected, preferences::load_preferences, preferences::save_preferences, tags::list_tags, tags::create_tag, tags::rename_tag, tags::delete_tag, tags::filter_folder_videos, workspace_search::start_workspace_scan, workspace_search::workspace_scan_status, workspace_search::cancel_workspace_scan, workspace_search::search_workspace, tags::selection_tags, tags::set_video_tag, tags::add_video_tags, tags::create_and_assign_tag, inspect_video, prepare_preview, generate_preview_thumbnail, preview_cache_directory, preview_index_location, editor::prepare_edit, editor::video_frame_times, editor::export::export_edit])
         .run(tauri::generate_context!())
         .expect("error while building Tauri application");
 }

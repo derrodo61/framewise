@@ -14,6 +14,25 @@ const { adjacentFrameTime, frameIndexAt } = await loadTypeScript('../src/frameNa
 const { cutPreviewAction } = await loadTypeScript('../src/cutPreview.ts')
 const { nextMediaIndex } = await loadTypeScript('../src/mediaNavigation.ts')
 const { sortMedia } = await loadTypeScript('../src/mediaSort.ts')
+const { filterMedia, visibleSelection, parentPath, sameParent } = await loadTypeScript('../src/mediaFilter.ts')
+assert.equal(parentPath('C:\\clips\\first.mp4'), 'C:\\clips')
+assert.equal(parentPath('C:\\first.mp4'), 'C:\\')
+assert.equal(parentPath('/first.mp4'), '/')
+assert.equal(parentPath('/clips/first.mp4'), '/clips')
+assert.equal(sameParent(['C:\\clips\\first.mp4', 'C:\\clips\\second.mp4']), true)
+assert.equal(sameParent(['/clips/first.mp4', '/other/first.mp4']), false)
+const filterEntries = [
+  { path: 'folder', isDirectory: true },
+  { path: 'first.mp4', isDirectory: false, videoId: 1 },
+  { path: 'uncatalogued.mp4', isDirectory: false },
+  { path: 'second.mp4', isDirectory: false, videoId: 2 },
+]
+assert.deepEqual(filterMedia(filterEntries, false, []), filterEntries)
+const filtered = filterMedia(filterEntries, true, [2])
+assert.deepEqual(filtered.map(entry => entry.path), ['folder', 'second.mp4'])
+assert.deepEqual(filterMedia(filterEntries, true, []).map(entry => entry.path), ['folder'])
+assert.deepEqual(visibleSelection(['first.mp4', 'folder', 'second.mp4'], filtered), ['folder', 'second.mp4'])
+assert.equal(nextMediaIndex(0, filtered.length, 1, 'ArrowDown'), 1)
 const { extractGenerationMetadata } = await loadTypeScript('../src/generationMetadata.ts')
 const expectedPrompt = 'A small red sailboat glides across a calm lake at sunrise. Gentle ripples spread behind it. Mist floats above the water. The camera slowly pans to follow the boat.'
 for (const [file, format] of [['comfy', 'ComfyUI'], ['wan2gp', 'WAN2GP']]) {

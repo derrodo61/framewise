@@ -1,0 +1,365 @@
+# Video tags and search
+
+## Goal
+
+Make a growing video collection easy to organize and find without relying only on folder names. Users can manage tags, assign or remove them from individual videos or batches, and find tagged videos across their workspace in either List or Grid view.
+
+This document is the implementation roadmap for `codex/video-tags-and-search`, based on `main` at `1bd2f08`. Implement and test one phase at a time, then review the result before beginning the next phase.
+
+## First release scope
+
+- Manual tags stored locally in Framewise's SQLite database.
+- Create, rename, and delete tags.
+- Assign and remove tags on one or several selected videos.
+- Filter using one or more tags, with Match all / Match any.
+- Search scope: Current folder or Entire workspace, including subfolders.
+- Results in List and Grid, with folder location visible for workspace results.
+- Keep existing preview, playback, keyboard navigation, sorting, and file actions working.
+
+The first release organizes videos. Photo support, automatic tags, filename/date/generator/prompt filters, and reliable discovery of files moved outside Framewise are later extensions.
+
+## Product decisions
+
+- Tags belong to video records, not thumbnail files. Clearing the preview cache must never remove tags.
+- Tags are shared across workspaces in the user's local database, not embedded into video metadata.
+- Trim tag names, reject empty names, and prevent case-insensitive duplicate names. Preserve the user's display spelling and support Unicode.
+- Deleting a tag requires confirmation and removes its assignments, never the videos.
+- Adding a tag to a batch adds it to all selected videos. Removing it removes it from all selected videos. Existing unrelated tags remain unchanged.
+- Batch controls distinguish tags assigned to all selected videos from tags assigned to only some.
+- Tag filters select videos; folders are not taggable in this release. Keep folder navigation available separately from the result list.
+- Current folder means direct children only. Entire workspace means supported videos under the chosen workspace root, including nested folders.
+- An empty tag filter shows all videos in the selected scope. No matches shows a clear empty state with a Clear filters action.
+- Start with Current folder and Match all. Preserve the view, sorting, and grid-size preferences. Reset active tag filters when changing workspace so a new workspace does not unexpectedly appear empty.
+- In-app moves and renames preserve video IDs and tags, including nested videos when moving or renaming a folder.
+- Save retains the video's tags. Duplicate and Save As create a new video record and copy the source's tag assignments.
+- Retain records and assignments for videos moved to Trash or temporarily missing, but exclude them from normal search. A reused path must not silently give an unrelated video the previous video's tags.
+
+## Current implementation
+
+- `~/.framewise/framewise.db` currently contains the preview index, schema version 1.
+- Preview associations use the video path and a file version derived from its size and modification time.
+- Existing move, rename, edit, duplicate, and Trash operations already contain preview lifecycle integration.
+- Directory browsing currently enumerates one folder. Workspace-wide searching needs an index and recursive discovery.
+- ComfyUI and WAN2GP prompt extraction uses the inspected metadata; it is not a searchable metadata catalog yet.
+
+## Proposed data model
+
+Extend the existing database with tables equivalent to:
+
+| Table | Purpose |
+| --- | --- |
+| `videos` | Stable ID, canonical path, filename, size, modification time, discovery/status information |
+| `tags` | Stable ID, display name, normalized unique name |
+| `video_tags` | Unique video/tag pairs with foreign keys and indexes |
+| Workspace scan state | Track completed scans and distinguish missing files from incomplete or failed scans |
+
+Use paths and file versions as discovery information, not as permanent identity. Move/rename operations performed by Framewise explicitly transfer the known ID. Size and timestamps alone are insufficient to identify an externally moved video reliably.
+
+Prefer one shared database layer with versioned migrations, transactions, foreign-key enforcement, and parameterized queries. Preserve the existing preview records and cache behavior during migration. Final field names and scan-state representation will be chosen in Phase 1.
+
+## Phases and checkpoints
+
+### Phase 0 — Plan
+
+Status: Complete.
+
+- Create the feature branch and this roadmap.
+- Keep runtime behavior unchanged until Phase 1 is authorized.
+
+### Phase 1 — Database foundation and stable video records
+
+Status: Complete. Automated checks passed; the user confirmed development-mode browsing, cached previews, and restarting work.
+
+Implementation decisions:
+
+- Shared initialization and connection ownership live in `src-tauri/src/database.rs`; preview queries use that connection.
+- SQLite `user_version` remains 1 and the `previews` table is unchanged, preserving the installed 0.1.21 app's preview access. New catalog migrations use `catalog_schema.version`, currently 1. A compatibility test reads and writes previews through a legacy connection without the new tag validation function.
+- Before migrating an existing database, SQLite creates a consistent snapshot (including committed WAL data) named `~/.framewise/framewise-before-catalog-v1-<timestamp>.db`. The snapshot is flushed before migration, and its path is logged. Successful catalog initialization does not repeat this backup on subsequent launches.
+- Tables cover videos, tags, assignments, completed folder discovery, and future workspace scan runs. Assignments enforce foreign keys and unique video/tag pairs.
+- Normal folder opening/refresh registers direct-child videos, returning optional `videoId` values. Discovery uses existing filesystem metadata, with nanosecond modification times, and does not run ffprobe or generate thumbnails. File-operation response listings will be integrated in Phase 2.
+- Unchanged active records retain their IDs. A changed size or modification time retires the old record as `changed` and creates a new, untagged record. Absent direct children become `missing` only after a successful listing. Present files with unreadable metadata and files in other folders are not marked missing.
+- Reappearing paths get new IDs rather than silently inheriting historical assignments. Size/time are only identity hints: unrelated replacements with identical hints cannot be detected yet. Explicit in-app identity preservation belongs to Phase 2; external reconciliation remains deferred.
+- Tag display names preserve trimmed spelling, allow 1–100 characters, and reject control characters. Unique keys use Unicode normalization and full case folding, including composed/decomposed accents and `Straße` / `STRASSE` equivalence. Database constraints validate keys using the shared connection's registered SQL function.
+- Preview cache removal does not affect catalog records or assignments. Unsupported schemas and migration failures leave existing records intact; migrations are transactional.
+
+Validation:
+
+- Rust tests cover WAL-aware backups, reopening, legacy preview compatibility, rollback on migration failure, Unicode validation, duplicate assignments, foreign keys, stable discovery IDs, retained history, missing metadata, folder isolation, and transaction rollback for an invalid batch.
+- Existing preview lifecycle and filesystem/editor tests continue to pass.
+- Frontend production build, lint, and existing tests pass. No installer or version bump was created.
+- Manual development-mode checks for browsing, cached preview responsiveness, and restarting were confirmed by the user. Installed 0.1.21 compatibility was verified through the database compatibility test; a manual installed-app check and manual inspection of the backup file were not reported.
+
+Manual checkpoint:
+
+1. Start the development app and browse a folder; verify the existing file list and Inspector behave as before.
+2. Select previously previewed videos; check that cached previews remain fast.
+3. Restart the development app and repeat browsing and previewing.
+4. Check `.framewise` for the pre-migration snapshot after the first successful upgrade of an existing database.
+5. Optionally run the installed 0.1.21 app and confirm its previews still work. Its file actions do not maintain catalog identities yet; Phase 2 integrates those actions in the development app.
+
+This phase adds backend foundations only; tag management and assignment controls arrive in Phases 3 and 4.
+
+Work:
+
+- Separate shared database initialization/migrations from preview-specific queries.
+- Add video, tag, and assignment tables, indexes, and validated tag-name normalization.
+- Register videos discovered through ordinary directory browsing without probing every file with ffprobe.
+- Define handling for known-path changes, missing records, and path reuse; avoid silently transferring assignments to unrelated content.
+- Make migrations transactional and repeatable. Coordinate schema version handling across every database consumer.
+
+Checkpoint:
+
+- Tests migrate a representative version-1 database without losing preview entries.
+- Reopening the database preserves IDs and assignments; duplicate tags and assignments are rejected.
+- Existing cached previews, preferences, and directory browsing still work.
+- Test against temporary database fixtures first. Before migrating the user's shared database, provide a recoverable backup and address older installed builds' schema compatibility. Development and installed builds share this database today.
+
+### Phase 2 — File-operation identity and tag preservation
+
+Status: Complete. Automated checks passed; the user completed the manual checklist and reported no problems. Depends on Phase 1.
+
+Implementation decisions:
+
+- Moves and renames retain IDs and assignments, including supported videos discovered recursively inside moved/renamed folders. Source records are prepared before filesystem changes.
+- Save updates the original record's file version and retains its ID. Duplicate and Save As explicitly create separate records and copy the source's assignments. File-operation response listings now register catalog IDs.
+- Trash retains IDs and assignments with `trashed` status; partial batch failures update only videos actually absent afterward. Existing preview relocation/cleanup remains in place.
+- Tagged videos receive a SHA-256 content identity before Trash. A file restored at its old path reuses a trashed record only when its size and content hash uniquely match. An unrelated replacement or multiple matching historical records receives a new ID. Untagged videos are not read for hashing during deletion; external moves and general missing-file reconciliation remain deferred.
+- The catalog schema is now version 3: operation receipts and optional content hashes are additive migrations. SQLite `user_version` and the preview schema remain unchanged. Existing databases receive a consistent `framewise-before-catalog-v3-<timestamp>.db` snapshot before upgrading.
+- `~/.framewise/catalog-operations` holds flushed preparation/completion JSON journals. Completed filesystem operations can replay catalog transactions after restart; receipts make replay idempotent. Successful or safely canceled operations remove their journals.
+- Operations with overlapping source/destination paths are rejected while another operation is using them. Preparation captures filenames, sizes, and modification times without ffprobe or thumbnail generation.
+- If filesystem work succeeds but catalog persistence fails, the app reports pending recovery rather than ordinary success. Ambiguous interruptions and destinations changed before recovery retain the journal and original assignments for manual review; they are not guessed from size/time. Catalog discovery is deferred in that situation and the browser shows a warning. No journal-review UI is included yet.
+- Tag assignments in these tests are seeded into temporary databases. Tag management/assignment controls still arrive in Phases 3 and 4.
+
+Validation:
+
+- Tests cover nested folder moves, video renames, batch moves including changed timestamps after copy/remove transfers, separate Duplicate/Save As records, Save identity, partial Trash, restored tagged content, same-size unrelated replacements, canceled collisions, overlapping operations, database transaction failure, idempotent restart recovery, ambiguous interruption, and changed destinations.
+- Schema-upgrade tests preserve Phase 1 IDs, assignments, and previews and verify the pre-upgrade snapshot.
+- All 42 Rust tests passed, including the existing preview lifecycle, filesystem operations, and real FFmpeg export tests. Frontend build/lint/tests and Rust clippy passed.
+- No installer or version bump was created. Actual multi-drive and Mac/Linux manual checks have not been performed in this phase.
+- The user completed the Windows development-mode manual checklist for Duplicate, rename/move, folder operations, Save/Save As, Trash/cancel/restore, collisions, restarting, and previews, and reported no problems. Tag preservation remains verified through backend tests until the tag controls are implemented.
+
+Manual checkpoint (use copies of test videos):
+
+1. Duplicate a video, rename the duplicate, move it, and restart. Confirm the file list, metadata, and previews still work.
+2. Rename and move a folder containing nested videos. Browse those videos afterward and after restarting.
+3. Edit a test video and try both Save As and Save. Confirm output playback, metadata, and preview refresh.
+4. Cancel a Trash dialog, then Trash one or several test copies. Verify the remaining list and restore a copy through the system Trash/Recycle Bin to check browsing again.
+5. Attempt a move/rename into an existing name; verify it fails without moving anything unexpectedly.
+6. Confirm previously cached previews remain responsive. Tag identity preservation is covered by backend tests until the tag UI exists.
+
+Work:
+
+- Integrate IDs and assignments with video/folder move and rename, Save, Save As, Duplicate, and Trash.
+- Update descendant paths when a folder moves or changes name.
+- Preserve the existing preview relocation and cleanup behavior.
+- Handle filesystem success followed by database failure explicitly. Record enough recovery information to reconcile on restart rather than reporting a successful organization update prematurely.
+
+Checkpoint:
+
+- Filesystem tests verify tags survive single/batch moves, folder moves, renames, and Save.
+- Save As and Duplicate produce separate records with copied assignments.
+- Collision, cancellation, and rollback cases do not assign tags to the wrong path.
+- Trash/missing records stay out of results; restoring a recognized record preserves its tags.
+- Preview caching and generation metadata remain unchanged by these operations.
+
+### Phase 3 — Manage tags
+
+Status: Complete. Core functionality tested by the user with no problems reported; the user accepted the tabbed revision for commit and authorized Phase 4. A separate manual report on the tab refinement was not provided. Depends on Phase 1.
+
+Implementation decisions:
+
+- Settings contains a Manage tags section with create, search, inline rename, refresh, and delete controls. It uses asynchronous backend commands and reloads when Settings opens; stale search responses cannot replace the current search results.
+- Settings now separates general preferences and tag management into **Settings** and **Tags** tabs. The tabs remain accessible while scrolling; Left/Right and Home/End navigate them. A long tag list does not move the general preferences downward, and switching tabs retains tag search/edit state for the current Settings session.
+- Search uses the same Unicode normalization and full case folding as tag-name uniqueness. Create/rename trim names, preserve display spelling, and report validation or duplicate-name errors. Changing only display case is supported.
+- Tag rows show the count of assigned videos across the local catalog, including missing/trashed records. Delete confirmation states that assignments are removed and video files are kept.
+- Deletion atomically verifies the confirmed tag name and assignment count. If they changed while the dialog was open, deletion is rejected and the UI refreshes for another review. Renaming preserves the tag ID and its assignments.
+- Settings now spans the full content area to the right of Workspace. The Inspector and its divider are absent in Settings; returning to Your media restores the saved Inspector layout. Opening Settings clears pending playback requests, and unmounting the Inspector stops video playback.
+- No schema migration, version bump, or installer was needed for this phase. Assigning tags to videos remains Phase 4.
+
+Validation:
+
+- Backend tests cover tag persistence, whitespace/empty/control-character/length validation, Unicode-equivalent duplicates, Unicode search, rename collisions, display-case changes, stable IDs/assignment counts, stale deletion confirmation, and deletion without removing video records.
+- All 45 backend tests pass alongside existing frontend tests, build, lint, and Rust clippy checks.
+- The user tested tag management and the full-width Settings layout and reported no problems. They requested separate tabs to keep long tag lists separate from other preferences; that layout refinement is implemented and awaits their manual check.
+
+Manual checkpoint:
+
+1. Open Settings from Your media with an expanded Inspector. Confirm Settings occupies the former middle and right area, with no Inspector or right divider.
+2. Create `Landscape`, `Keeper`, and a Unicode tag such as `Café`. Restart and confirm they remain.
+3. Try creating `landscape`, an empty/whitespace-only name, and a name longer than 100 characters. Confirm clear validation and no extra tag.
+4. Search for a tag, rename it, cancel another rename, and change only a tag's display case.
+5. Delete a tag: cancel once, then confirm. Verify the tag disappears and videos remain untouched.
+6. Return to Your media; check the Inspector layout, preview, and playback. Also check Settings with a collapsed Inspector, collapsed Workspace, and light/dark themes.
+7. Counts will normally be zero until Phase 4 assignment controls exist; assignment preservation and deletion counts are covered by seeded backend tests now.
+
+Work:
+
+- Add an accessible Manage tags section to Settings.
+- List and search tags; create, rename, and delete them.
+- Show useful validation errors and confirm tag deletion with the affected video count.
+- Show changes consistently wherever tags are displayed.
+
+Checkpoint:
+
+- Manually create, rename, and delete tags; restart and verify persistence.
+- Test empty names, duplicate names, case differences, and Unicode.
+- Renaming changes existing labels; deletion removes assignments without touching video files.
+
+### Phase 4 — Single and batch tag assignment
+
+Status: Complete. Automated checks passed; the user tested the feature and reported it works perfectly. Depends on Phases 2 and 3.
+
+Implementation decisions:
+
+- The Inspector has a Tags section for the displayed video, independent of ffprobe success. It shows assigned tags, removal buttons, an existing-tag picker, and a create-and-add field. Its helper text explicitly limits these actions to the displayed video even when several list items are selected.
+- List and Grid context menus offer Edit tags for the selected videos. The modal freezes the selected IDs/paths and lists filenames. It shows All versus Some assignment counts, Add to all for partial tags, and Remove from all. Changes are saved immediately; Close/Done and Escape exit after pending writes finish.
+- Creating while assigning is atomic. A Unicode-equivalent existing name reuses the existing tag rather than creating a duplicate or changing its display spelling.
+- Backend commands validate each video's active catalog ID, canonical path, workspace membership, size, and nanosecond modification time before any assignment changes. Missing, moved, changed, unknown, unsupported, and directory targets are rejected. Duplicate targets are deduplicated and partial validation failures roll back the entire batch.
+- Pending catalog recovery is checked before tag operations, and videos involved in live file operations cannot be tagged until those operations finish. Add is idempotent; removal affects only the selected video/tag pairs.
+- Selection loads and writes use transactions and return aggregate assignment counts. New selection scopes mount separate editors; stale asynchronous reads cannot replace a newer result. Batch changes refresh the Inspector, and returning to Settings reloads global tag counts/names.
+- The batch dialog traps keyboard focus using the native modal dialog and restores focus to the clicked video on close. Tag inputs do not trigger file-list Enter/Delete shortcuts.
+- No migration, version bump, or installer was needed. Video files and their embedded metadata are not modified by assigning tags.
+
+Validation:
+
+- Backend tests cover single and batch add/remove, partial/all counts, idempotency, unrelated assignment preservation, duplicate targets, Unicode create-and-reuse, persistence, tag rename/delete propagation, stale versions, missing videos, wrong IDs, folders, out-of-workspace paths, unknown tags, and batch rollback.
+- All 48 Rust tests pass, including existing operation-recovery and FFmpeg tests. Frontend build, lint, tests, and Rust clippy pass.
+- The user tested the implemented tag-assignment feature and reported no problems.
+
+Manual checkpoint:
+
+1. Select a test video and add an existing tag in the Inspector. Create another tag there, remove one, and check the remaining tag stays.
+2. Give two videos different tags. Ctrl/Command-click or Shift-click both, right-click one, and choose Edit tags. Verify Some versus All counts.
+3. Add a partial tag to all, then remove another tag from all. Close the dialog and inspect each video separately. A third, unselected video's tags must remain unchanged.
+4. Reuse an existing name in the create-and-add field, including a different letter case. Confirm there is only one global tag in Settings → Tags.
+5. Restart and verify assignments. Rename a tag in Settings and confirm the Inspector uses its new name; delete a test tag and confirm assignments disappear while videos remain.
+6. Try tagging in both List and Grid, with keyboard selection. Folders should not offer Edit tags. Change the displayed video while a single-video tag operation is pending; the new video must not show the previous video's result.
+7. Now that tags are visible, optionally repeat Phase 2 checks on tagged copies: rename/move, Duplicate, Save As, Save, and Trash/restore. Check that IDs/assignments follow the documented rules.
+8. Confirm Inspector playback, Enter play/pause, and prompt copying still work alongside the tag controls. Tag filtering arrives in Phase 5.
+
+Work:
+
+- Add a Tags section in the Inspector with assigned tags, removal controls, and an existing-tag picker.
+- Allow creating a new tag from the assignment flow.
+- Add a context-menu action for tagging selected videos in List and Grid.
+- Provide a batch panel/dialog when several videos are selected; do not treat the Inspector's last selected video as the entire batch.
+- Indicate tags present on all versus only some selected videos.
+
+Checkpoint:
+
+- Assign and remove tags from one video and a batch; verify after restarting.
+- Adding an existing tag is harmless; removing one leaves unrelated assignments intact.
+- Test Ctrl/Command-click, Shift-click, keyboard selection, folder selections, and selection changes during an operation.
+- Existing Inspector playback and prompt-copy actions still work.
+
+### Phase 5 — Tag filtering in the current folder
+
+Status: Complete. Automated checks pass; user tested and approved.
+
+Implemented:
+
+- Current-folder tag selection, removable active chips, Match all / Match any, result count, and Clear filters.
+- Database queries use stable video and tag IDs and exclude inactive catalog records.
+- List/Grid rendering, sorting, keyboard navigation, range selection, and context actions share the filtered sequence. Folders and parent navigation remain available.
+- Hidden selections and Inspector content are cleared. Stale asynchronous filter results are discarded; query failures show an error rather than unfiltered videos.
+- Filters remain active while browsing the same workspace, reset on workspace changes, and refresh after assignments or returning from tag settings.
+- Frontend tests cover preserved folders, uncatalogued videos, cleared hidden selections, and filtered keyboard order. Backend tests cover all/any, duplicate IDs, no filters/no matches, folder boundaries, assignment changes, renamed/deleted tags, and missing/trashed records.
+- Checks: frontend build, lint and tests; 49 Rust tests.
+
+Manual checkpoint:
+
+1. Assign two tags to overlapping video sets. Select both filters and compare Match all with Match any; check the result count and remove individual chips.
+2. Try List and Grid, sorting, grid sizes, arrow keys, Enter, Shift selection, and context actions on the results.
+3. Browse a subfolder and back with filters active, including a folder with no matches. Folders remain visible; Clear filters restores all videos.
+4. Remove a matching tag from a selected video, including through batch editing. A video that no longer matches disappears and its Inspector clears.
+5. Rename/delete an active tag in Settings, then return to Your media. Filters update. Switch workspace and back; old filters must not return.
+
+Work:
+
+- Add tag selection, Match all / Match any, active-filter indicators, result count, and Clear filters above the list.
+- Query using video IDs and tag IDs, not rendered labels.
+- Keep folder navigation separate and available while filtering videos.
+- Ensure rendering, keyboard movement, range selection, and context menus use the same filtered and sorted sequence.
+- Define selection behavior when filtering hides a selected video: clear hidden selection and Inspector content rather than leaving invisible action targets.
+
+Checkpoint:
+
+- Tests cover all/any combinations, no filters, no matches, renamed/deleted tags, and missing files.
+- Manually verify both views, sorting, grid sizes, keyboard actions, and batch operations.
+- A folder navigation action retains the active filter within the same workspace and clearly shows it is active.
+
+### Phase 6 — Workspace discovery and search across subfolders
+
+Status: Complete. Automated checks pass; user reported the functionality works.
+
+Implemented:
+
+- Scope selector for Current folder / Entire workspace. Entering workspace scope starts discovery; switching scope, opening Settings, or changing workspace cancels the previous scan. Asynchronous requests are stamped with workspace identity and discarded when stale.
+- A serialized background worker discovers regular supported video files, skips links, reports folder/video counts and the current folder, and supports cancellation. It uses a separate SQLite connection and never generates previews or calls ffprobe.
+- Complete folder listings update catalog records atomically. Unreadable folders retain their records. Only a fully successful traversal retires records in vanished subfolders; cancellation and warnings prevent this final cleanup. Existing missing/changed/trashed history and assignments remain intact.
+- Workspace queries use indexed path boundaries and video/tag IDs, with Match all/any, total counts, filename/date sorting in both directions, and pages of 200 results. Filename sorting in workspace queries uses SQLite's alphabetical NOCASE order; current-folder sorting retains its natural filename order.
+- Result rows/cards show their relative folder location. Open containing folder and Show in Explorer/Finder remain available. Thumbnail generation remains visibility-driven through the existing queue.
+- Selection, arrow keys, range selection and context menus share the displayed page. Page/scope changes clear selection and Inspector content. Batch tagging accepts videos from different folders; Move To and Trash explicitly require a single parent folder before submitting a batch. Individual rename/duplicate/edit actions remain available.
+- A workspace scan temporarily reserves its paths against file operations and tag assignments, avoiding discovery races. Playback and preview inspection remain available. Root/scan IDs prevent late cancellation requests from cancelling a newer job.
+- Existing-tag assignment supports multiple checkbox selections, search without losing selections, and an atomic Add selected action for one or several videos. User tested and approved this improvement; all eight backend tag tests, frontend checks, and Clippy passed.
+- Work limits: 10,000 directory entries per folder and 100,000 entries across a workspace scan. Exceeded limits are reported; choose a smaller workspace. Result rendering is bounded by the page size.
+- Automated checks: frontend build, lint and tests; 55 Rust tests; Clippy with warnings denied. Added tests cover nested duplicate filenames, removed files/subtrees, unavailable roots, mid-scan interruption, scan reservations, filter combinations, tag rename/delete, path boundaries, pagination and sort directions. Link-cycle coverage runs on Unix; native Mac/Linux behavior remains unverified here.
+
+Manual checkpoint:
+
+1. Choose a workspace with several video subfolders. Select Entire workspace; check discovery progress and matching results across folders.
+2. Test both views, sorting, grid sizes, paging (if more than 200 matches), arrow keys, Enter playback and Shift/Ctrl selection.
+3. Check videos with identical names in different folders. Play the correct file, reveal it in Explorer, and use Open containing folder.
+4. Select videos from different folders and edit their tags together. Confirm Move To/Trash explain the single-folder restriction; test individual rename/duplicate and same-folder batches.
+5. Cancel a scan, switch workspace while scanning, and return to folder scope. No previous workspace's results should appear. Rescan to complete discovery.
+6. Add/remove a video outside Framewise, rescan, and verify results. Check cached previews remain fast and playback stays responsive.
+
+Work:
+
+- Add Current folder / Entire workspace scope selection.
+- Discover supported videos recursively in a background task, with progress, cancellation, and bounded work. Skip links consistently with existing browsing rules.
+- Use indexed tag queries for results. Load thumbnails only near visible results; do not generate thumbnails or inspect every video's metadata during scanning.
+- Mark missing records only after their relevant subtree was successfully scanned. Permission errors, cancellation, or an unavailable drive must not mark an entire collection deleted.
+- Display result locations and keep Show in Explorer/Finder available.
+- Generalize actions that currently assume one source folder: group workspace selections by parent where required, or clearly restrict unsupported cross-folder batches until they are implemented. Never submit a mixed-parent selection to commands that require a single parent.
+- Ensure workspace discovery, scan responses, and selection do not leak into a subsequently chosen workspace.
+
+Checkpoint:
+
+- Scan fixtures with nested folders, duplicate filenames, inaccessible folders, removed files, and interrupted scans.
+- Find matching videos across several subfolders and open the correct video despite identical filenames.
+- Verify result actions and any cross-folder batch restrictions.
+- Check responsiveness on a large collection and confirm existing cached previews remain fast.
+
+### Phase 7 — Integrated review and release preparation
+
+Status: Pending. Depends on Phase 6.
+
+Work:
+
+- Review database ownership, migration recovery, scan/query performance, and UI consistency.
+- Document tag storage, backup implications, search scope, and external-move limitations.
+- Review on Windows and perform Mac/Linux checks when those environments are available; record unverified platform behavior honestly.
+- Run the applicable existing test/build/lint checks and targeted regression tests.
+
+Checkpoint:
+
+- Complete an end-to-end session: scan, create tags, batch-tag, filter across folders, move/rename, restart, and find the same videos again.
+- Confirm light/dark themes, independent panel scrolling, saved layout, preview speed, prompt extraction, and playback shortcuts.
+- Review the feature branch before merging into `main`.
+- Build a Windows installer only when requested by the user.
+
+## Later extensions
+
+- Filename, date, generator, and prompt-text filters using the same search interface.
+- Optional automatic tag suggestions, clearly distinguished from manual assignments.
+- External move/rename reconciliation using stronger file identity evidence and user review for ambiguity.
+- Photo support, saved searches, tag groups/colors, and tag import/export.
+
+## Working process
+
+1. Implement the next agreed phase, keeping it small enough to review.
+2. Run its focused automated checks and provide a short manual testing checklist.
+3. Record outcomes and decisions in this document, including any limitations.
+4. Review with the user before proceeding to the next phase.
+5. Commit/push when requested. Create an installer only when explicitly requested.

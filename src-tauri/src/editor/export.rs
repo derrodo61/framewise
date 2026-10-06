@@ -459,6 +459,7 @@ pub(crate) async fn export_edit(
     }
     let destination = output_path(&request.destination, &source, request.replace)?;
     tauri::async_runtime::spawn_blocking(move || {
+        let operation = crate::catalog_operations::Operation::begin(if request.replace { crate::catalog_operations::Action::Replace } else { crate::catalog_operations::Action::Copy }, vec![source.clone()], vec![Some(destination.clone())])?;
         let legacy_name = if request.replace { crate::thumbnail_name(&source) } else { None };
         let result = export_impl(
             source.clone(),
@@ -472,7 +473,7 @@ pub(crate) async fn export_edit(
         if result.is_ok() && request.replace {
             crate::forget_video_preview(&source, legacy_name.as_deref());
         }
-        result
+        match result { Ok(result) => { operation.finish()?; Ok(result) }, Err(error) => { operation.cancel_if_unchanged(); Err(error) } }
     })
     .await
     .map_err(|error| format!("Editor task failed: {error}"))?

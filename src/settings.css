@@ -73,6 +73,14 @@
 .settings-loading { margin-top: 12px; font-size: 11px; color: #5575a5; }
 
 .settings-card + .settings-card { margin-top: 18px; }
+.settings-tabs { display: flex; gap: 6px; margin-top: 24px; border-bottom: 1px solid #dfe6ef; padding-bottom: 7px; position: sticky; top: 0; z-index: 2; background: #f7f9fc; }
+.settings-tabs button { padding: 10px 20px; border: 0; border-radius: 7px; background: transparent; color: #68788e; font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; }
+.settings-tabs button[aria-selected='true'] { background: #eaf2ff; color: #245fc4; }
+.settings-tabs button:focus-visible { outline: 2px solid #77a4f4; outline-offset: 2px; }
+[role='tabpanel'] > .settings-card:first-child { margin-top: 18px; }
+[data-theme='dark'] .settings-tabs { background: #141c29; border-color: #354359; }
+[data-theme='dark'] .settings-tabs button { color: #a9b8ce; }
+[data-theme='dark'] .settings-tabs button[aria-selected='true'] { background: #253b59; color: #b7d1ff; }
 .theme-options { display: flex; gap: 12px; margin-top: 24px; }
 .theme-option {
   flex: 1;

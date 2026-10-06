@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{AppState, DirectoryListing, list_folder, relocate_folder_previews, relocate_video_preview, selected_root, thumbnail_name, video_file, within_root};
+use crate::{AppState, DirectoryListing, relocate_folder_previews, relocate_video_preview, selected_root, thumbnail_name, video_file, within_root};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -119,12 +119,16 @@ pub(crate) async fn rename_video(
         return Err("Select a supported video file".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
+        if !valid_stem(&new_stem) { return Err("Choose a valid video name.".into()); }
+        let target = source.with_file_name(format!("{new_stem}.{}", source.extension().ok_or("Cannot read extension")?.to_string_lossy()));
+        let operation = crate::catalog_operations::Operation::begin(crate::catalog_operations::Action::Move, vec![source.clone()], vec![Some(target)])?;
         let legacy_name = thumbnail_name(&source);
-        let renamed = rename_file(&source, &new_stem)?;
+        let renamed = match rename_file(&source, &new_stem) { Ok(path) => path, Err(error) => { operation.cancel_if_unchanged(); return Err(error); } };
         relocate_video_preview(&source, &renamed, legacy_name.as_deref());
+        operation.finish()?;
         let folder = source.parent().ok_or("Cannot find the video's folder")?;
         Ok(RenameResult {
-            listing: list_folder(folder, &root)?,
+            listing: crate::catalogued_folder(folder, &root)?,
             renamed_path: renamed.to_string_lossy().into_owned(),
         })
     })
@@ -150,11 +154,14 @@ pub(crate) async fn rename_folder(
         return Err("The selected media folder cannot be renamed here.".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let renamed = rename_directory(&source, &new_name)?;
+        if !valid_stem(&new_name) { return Err("Choose a valid folder name.".into()); }
+        let operation = crate::catalog_operations::Operation::begin(crate::catalog_operations::Action::Move, vec![source.clone()], vec![Some(source.with_file_name(&new_name))])?;
+        let renamed = match rename_directory(&source, &new_name) { Ok(path) => path, Err(error) => { operation.cancel_if_unchanged(); return Err(error); } };
         relocate_folder_previews(&source, &renamed);
+        operation.finish()?;
         let parent = source.parent().ok_or("Cannot find the folder's parent")?;
         Ok(RenameResult {
-            listing: list_folder(parent, &root)?,
+            listing: crate::catalogued_folder(parent, &root)?,
             renamed_path: renamed.to_string_lossy().into_owned(),
         })
     })
