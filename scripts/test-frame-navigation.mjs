@@ -48,6 +48,16 @@ assert.equal(extractGenerationMetadata({ format: { tags: { comment: '{broken JSO
 const wanNoPrompt = { type: 'WanGP v13.141', seed: 42 }
 assert.deepEqual(extractGenerationMetadata({ format: { tags: { COMMENT: JSON.stringify(wanNoPrompt) } } }).prompts, [])
 assert.equal(extractGenerationMetadata({ format: { tags: { COMMENT: JSON.stringify(wanNoPrompt) } } }).format, 'WAN2GP')
+assert.equal(extractGenerationMetadata({ format: { tags: { COMMENT: JSON.stringify(wanNoPrompt) } } }).seeds[0].value, '42')
+const seedProbe = value => ({ format: { tags: { comment: `{"type":"WanGP v13.141","seed":${value}}` } } })
+assert.equal(extractGenerationMetadata(seedProbe('18446744073709551615')).seeds[0].value, '18446744073709551615')
+assert.equal(extractGenerationMetadata(seedProbe('0')).seeds[0].value, '0')
+assert.equal(extractGenerationMetadata(seedProbe('"000123"')).seeds[0].value, '123')
+assert.equal(extractGenerationMetadata(seedProbe('-1')).seeds.length, 0)
+assert.match(extractGenerationMetadata(seedProbe('-1')).warnings[0], /actual seed was not recorded/)
+assert.equal(extractGenerationMetadata(seedProbe('false')).seeds.length, 0)
+assert.equal(extractGenerationMetadata(seedProbe('1.5')).seeds.length, 0)
+assert.equal(extractGenerationMetadata({ format: { tags: { seed: '18446744073709551615' } } }).seeds[0].value, '18446744073709551615')
 assert.equal(extractGenerationMetadata({ format: { tags: { comment: JSON.stringify({ prompt: 'Unidentified producer' }) } } }).format, 'Unknown')
 const graphFixture = {
   out: { class_type: 'VHS_VideoCombine', inputs: { images: ['sample', 0] } },
@@ -88,6 +98,23 @@ inactiveGenerator.prompt['523'] = { class_type: 'UnknownGenerator', inputs: { pr
 assert.deepEqual(extractGenerationMetadata(switchedProbe(inactiveGenerator)).prompts.map(prompt => prompt.text), [autoText])
 assert.deepEqual(extractGenerationMetadata({ format: { tags: { prompt: JSON.stringify(switched.prompt), workflow: JSON.stringify(switched.workflow) } } }).prompts.map(prompt => prompt.text), [autoText])
 const comfyResult = extractGenerationMetadata(comfyProbe(graphFixture))
+const seededGraph = structuredClone(graphFixture)
+seededGraph.sample.inputs.seed = ['intSeed', 0]
+seededGraph.intSeed = { class_type: 'PrimitiveInt', inputs: { value: '18446744073709551615' } }
+seededGraph.sample.inputs.noise = ['noise', 0]
+seededGraph.noise = { class_type: 'RandomNoise', inputs: { noise_seed: 0 } }
+seededGraph.unusedSeed = { class_type: 'KSampler', inputs: { seed: 999 } }
+assert.deepEqual(extractGenerationMetadata(comfyProbe(seededGraph)).seeds.map(seed => [seed.kind, seed.value]), [['video', '18446744073709551615'], ['video', '0']])
+const generatedSeeds = structuredClone(switched)
+generatedSeeds.prompt['516'].inputs.seed = 456
+generatedSeeds.prompt['327'].inputs.noise = ['noise', 0]
+generatedSeeds.prompt.noise = { class_type: 'RandomNoise', inputs: { noise_seed: 123 } }
+assert.deepEqual(extractGenerationMetadata(switchedProbe(generatedSeeds)).seeds.map(seed => [seed.kind, seed.value]), [['video', '123'], ['prompt', '456']])
+generatedSeeds.prompt['525'].inputs.boolean = true
+assert.deepEqual(extractGenerationMetadata(switchedProbe(generatedSeeds)).seeds.map(seed => seed.value), ['123'])
+const cyclicSeed = structuredClone(seededGraph)
+cyclicSeed.intSeed.inputs.value = ['intSeed', 0]
+assert.match(extractGenerationMetadata(comfyProbe(cyclicSeed)).warnings[0], /Cannot resolve seed/)
 assert.deepEqual(comfyResult.prompts.map(prompt => [prompt.kind, prompt.text]), [['positive', 'Positive\nSecond line'], ['negative', 'Blurry']])
 assert.deepEqual(comfyResult.warnings, [])
 const zeroGraph = structuredClone(graphFixture)

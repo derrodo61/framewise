@@ -1,7 +1,9 @@
 export type ExtractedPrompt = { kind: 'positive' | 'negative'; text: string; source: string }
+export type ExtractedSeed = { kind: 'video' | 'prompt' | 'other'; value: string; source: string }
 export type GenerationMetadata = {
   format: 'ComfyUI' | 'WAN2GP' | 'Unknown' | null
   prompts: ExtractedPrompt[]
+  seeds: ExtractedSeed[]
   warnings: string[]
 }
 type RecordValue = Record<string, unknown>
@@ -14,7 +16,12 @@ function record(value: unknown): value is RecordValue {
 }
 function decode(value: unknown): unknown {
   for (let depth = 0; depth < 4 && typeof value === 'string'; depth++) {
-    try { value = JSON.parse(value) } catch { break }
+    try {
+      // JSON seed integers can exceed JavaScript's exact numeric range. Preserve their digits.
+      const exact = value.replace(/"(?:\\.|[^"\\])*"|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/g, token =>
+        /^-?\d+$/.test(token) && !Number.isSafeInteger(Number(token)) ? JSON.stringify(token) : token)
+      value = JSON.parse(exact)
+    } catch { break }
   }
   return value
 }
@@ -37,6 +44,19 @@ function link(value: unknown, nodes: Graph): string | null {
 function addPrompt(result: GenerationMetadata, kind: ExtractedPrompt['kind'], value: unknown, source: string) {
   if (typeof value !== 'string' || !value.trim()) return
   if (!result.prompts.some(prompt => prompt.kind === kind && prompt.text === value)) result.prompts.push({ kind, text: value, source })
+}
+function addSeed(result: GenerationMetadata, kind: ExtractedSeed['kind'], value: unknown, source: string) {
+  if (value === -1 || (typeof value === 'string' && value.trim() === '-1')) {
+    result.warnings.push(`The seed at ${source} is set to random; the actual seed was not recorded there.`)
+    return
+  }
+  if (typeof value === 'number' && Number.isInteger(value) && !Number.isSafeInteger(value)) {
+    result.warnings.push(`The seed at ${source} cannot be read exactly; no rounded value is displayed.`)
+    return
+  }
+  const text = typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? String(value)
+    : typeof value === 'string' && /^\d+$/.test(value.trim()) ? BigInt(value.trim()).toString() : null
+  if (text !== null && !result.seeds.some(seed => seed.kind === kind && seed.value === text && seed.source === source)) result.seeds.push({ kind, value: text, source })
 }
 
 function extractComfy(nodes: Graph, result: GenerationMetadata, savedWorkflow: unknown) {
@@ -63,6 +83,21 @@ function extractComfy(nodes: Graph, result: GenerationMetadata, savedWorkflow: u
     // Easy Use saves a single output as [text] or [[text]], depending on its version.
     for (let depth = 0; depth < 4 && Array.isArray(value) && value.length === 1; depth++) value = value[0]
     return typeof value === 'string' && value.trim() ? value : null
+  }
+  function seedFrom(value: unknown, kind: ExtractedSeed['kind'], source: string, visited = new Set<string>()) {
+    const id = link(value, nodes)
+    if (!id) { addSeed(result, kind, value, source); return }
+    const node = nodes[id]
+    const label = `${node._meta?.title || node.class_type} (node ${id})`
+    if (visited.has(id) || visited.size > 64 || (value as unknown[])[1] !== 0) {
+      result.warnings.push(`Cannot resolve seed through ${label}.`); return
+    }
+    visited.add(id)
+    const branch = switchBranch(node)
+    if (branch?.resolved) { seedFrom(branch.input, kind, `${source} → ${label}`, visited); return }
+    if (/^(Int|Integer|PrimitiveInt|PrimitiveNode|Seed \(rgthree\)|Seed \[Crystools\])$/i.test(node.class_type)) {
+      seedFrom(node.inputs.value ?? node.inputs.seed ?? node.inputs.noise_seed, kind, `${source} → ${label}`, visited)
+    } else result.warnings.push(`Cannot resolve seed through ${label}.`)
   }
   const outputs = Object.keys(nodes).filter(id => /^(VHS_VideoCombine|SaveVideo|SaveAnimatedWEBP|SaveAnimatedPNG)$/i.test(nodes[id].class_type))
   if (!outputs.length) {
@@ -131,6 +166,10 @@ function extractComfy(nodes: Graph, result: GenerationMetadata, savedWorkflow: u
     const node = nodes[id]
     // Only follow semantic prompt/conditioning inputs in the active output branch.
     for (const [name, input] of Object.entries(node.inputs)) {
+      if (/^(seed|noise_seed)$/i.test(name)) {
+        const kind = /llama|llm|instruct/i.test(node.class_type) ? 'prompt' : /Sampler|Noise/i.test(node.class_type) || /^noise_seed$/i.test(name) ? 'video' : 'other'
+        seedFrom(input, kind, `${node._meta?.title || node.class_type} (node ${id}) → ${name}`)
+      }
       if (/^(prompt|positive|positive_prompt|negative|negative_prompt)$/i.test(name) || (name === 'conditioning' && /Guider$/i.test(node.class_type))) {
         textFrom(input, /negative/i.test(name) ? 'negative' : 'positive', `${node._meta?.title || node.class_type} (node ${id})`)
       }
@@ -139,7 +178,7 @@ function extractComfy(nodes: Graph, result: GenerationMetadata, savedWorkflow: u
 }
 
 export function extractGenerationMetadata(probe: ProbeMetadata): GenerationMetadata {
-  const result: GenerationMetadata = { format: null, prompts: [], warnings: [] }
+  const result: GenerationMetadata = { format: null, prompts: [], seeds: [], warnings: [] }
   const detected = new Set<'ComfyUI' | 'WAN2GP'>()
   let hasExecution = false
   const tags = [probe.format?.tags, ...(probe.streams ?? []).map(stream => stream.tags)].filter(Boolean)
@@ -149,6 +188,9 @@ export function extractGenerationMetadata(probe: ProbeMetadata): GenerationMetad
     const separateWorkflow = Object.entries(scope!).find(([key]) => key.toLowerCase() === 'workflow')?.[1]
     for (const [originalKey, raw] of Object.entries(scope!)) {
       const key = originalKey.toLowerCase()
+      if (/^(seed|noise_seed)$/.test(key)) {
+        candidate = true; addSeed(result, 'other', raw, originalKey); continue
+      }
       if (!['comment', 'description', 'prompt', 'workflow', 'parameters'].includes(key)) continue
       candidate = true
       const payload = decode(raw)
@@ -166,6 +208,7 @@ export function extractGenerationMetadata(probe: ProbeMetadata): GenerationMetad
         result.format = 'WAN2GP'
         addPrompt(result, 'positive', payload.prompt, `${originalKey} → prompt`)
         addPrompt(result, 'negative', payload.negative_prompt, `${originalKey} → negative_prompt`)
+        for (const [field, value] of Object.entries(payload)) if (/^(seed|noise_seed)$/i.test(field)) addSeed(result, 'video', value, `${originalKey} → ${field}`)
         if (typeof payload.prompt !== 'string' && payload.prompt !== undefined) result.warnings.push('The WAN2GP prompt field has an unsupported structure.')
         continue
       }
@@ -173,6 +216,7 @@ export function extractGenerationMetadata(probe: ProbeMetadata): GenerationMetad
         // A direct text field is useful even if the generator cannot be identified.
         addPrompt(result, 'positive', payload.prompt, `${originalKey} → prompt (unknown format)`)
         addPrompt(result, 'negative', payload.negative_prompt, `${originalKey} → negative_prompt (unknown format)`)
+        for (const [field, value] of Object.entries(payload)) if (/^(seed|noise_seed)$/i.test(field)) addSeed(result, 'other', value, `${originalKey} → ${field} (unknown format)`)
       } else if (key === 'prompt' && typeof payload === 'string' && !/^\s*[[{]/.test(payload)) {
         addPrompt(result, 'positive', payload, `${originalKey} (unknown format)`)
       }
@@ -183,5 +227,7 @@ export function extractGenerationMetadata(probe: ProbeMetadata): GenerationMetad
   if (detected.has('ComfyUI') && !hasExecution) result.warnings.push('ComfyUI workflow found, but no usable execution graph. Prompt extraction requires the executed node connections.')
   if (detected.size > 1) { result.format = 'Unknown'; result.warnings.push('More than one generation metadata format is present. Prompts are labelled with their individual sources.') }
   result.warnings = [...new Set(result.warnings)]
+  const seedOrder = { video: 0, prompt: 1, other: 2 }
+  result.seeds.sort((a, b) => seedOrder[a.kind] - seedOrder[b.kind])
   return result
 }
