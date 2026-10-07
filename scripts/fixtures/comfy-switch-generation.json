@@ -1,0 +1,13 @@
+{
+  "prompt": {
+    "354": { "class_type": "VHS_VideoCombine", "inputs": { "images": ["327", 0] } },
+    "327": { "class_type": "MiniMaxH3ReferenceToVideo", "inputs": { "prompt": ["525", 0] } },
+    "525": { "class_type": "Switch any [Crystools]", "_meta": { "title": "Manual ON / Autoprompt OFF" }, "inputs": { "boolean": false, "on_true": ["523", 0], "on_false": ["522", 0] } },
+    "523": { "class_type": "Text", "inputs": { "text": "Manual prompt: a boat crosses a lake." } },
+    "522": { "class_type": "easy showAnything", "_meta": { "title": "Generated autoprompt" }, "inputs": { "text": "Stale widget value, not the saved generated output", "anything": ["515", 0] } },
+    "515": { "class_type": "easy cleanGpuUsed", "inputs": { "anything": ["516", 0] } },
+    "516": { "class_type": "llama_cpp_instruct_adv", "inputs": { "custom_prompt": ["521", 0] } },
+    "521": { "class_type": "Text", "inputs": { "text": "Prompt idea: a boat on a lake." } }
+  },
+  "workflow": { "nodes": [ { "id": 522, "type": "easy showAnything", "widgets_values": ["Generated prompt: a red sailboat glides over a calm lake at sunrise."] } ], "links": [] }
+}

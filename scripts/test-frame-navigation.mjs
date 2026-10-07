@@ -58,6 +58,35 @@ const graphFixture = {
   unused: { class_type: 'CLIPTextEncode', inputs: { text: 'DO NOT EXTRACT' } },
 }
 const comfyProbe = graph => ({ format: { tags: { prompt: JSON.stringify(graph), workflow: JSON.stringify({ nodes: [{ id: 1, type: 'CLIPTextEncode' }], links: [] }) } } })
+const switched = JSON.parse(await readFile(new URL('fixtures/comfy-switch-generation.json', import.meta.url), 'utf8'))
+const switchedProbe = payload => ({ format: { tags: { comment: JSON.stringify(payload) } } })
+const autoText = switched.workflow.nodes[0].widgets_values[0]
+const autoResult = extractGenerationMetadata(switchedProbe(switched))
+assert.deepEqual(autoResult.prompts.map(prompt => prompt.text), [autoText])
+assert.deepEqual(autoResult.warnings, [])
+assert.match(autoResult.prompts[0].source, /saved in workflow/)
+const manualSwitch = structuredClone(switched)
+manualSwitch.prompt['525'].inputs.boolean = true
+assert.deepEqual(extractGenerationMetadata(switchedProbe(manualSwitch)).prompts.map(prompt => prompt.text), [switched.prompt['523'].inputs.text])
+const linkedSwitch = structuredClone(manualSwitch)
+linkedSwitch.prompt['525'].inputs.boolean = ['flag', 0]
+linkedSwitch.prompt.flag = { class_type: 'PrimitiveBoolean', inputs: { value: true } }
+assert.deepEqual(extractGenerationMetadata(switchedProbe(linkedSwitch)).prompts.map(prompt => prompt.text), [switched.prompt['523'].inputs.text])
+const unknownSwitch = structuredClone(switched)
+unknownSwitch.prompt['525'].inputs.boolean = 'false'
+assert.equal(extractGenerationMetadata(switchedProbe(unknownSwitch)).prompts.length, 0)
+assert.match(extractGenerationMetadata(switchedProbe(unknownSwitch)).warnings[0], /Cannot determine/)
+const missingOutput = structuredClone(switched)
+missingOutput.workflow.nodes = []
+assert.equal(extractGenerationMetadata(switchedProbe(missingOutput)).prompts.length, 0)
+assert.match(extractGenerationMetadata(switchedProbe(missingOutput)).warnings[0], /No generated text was saved/)
+const nestedDisplay = structuredClone(switched)
+nestedDisplay.workflow.nodes[0].widgets_values = [[autoText]]
+assert.deepEqual(extractGenerationMetadata(switchedProbe(nestedDisplay)).prompts.map(prompt => prompt.text), [autoText])
+const inactiveGenerator = structuredClone(switched)
+inactiveGenerator.prompt['523'] = { class_type: 'UnknownGenerator', inputs: { prompt: 'Must not extract this inactive prompt' } }
+assert.deepEqual(extractGenerationMetadata(switchedProbe(inactiveGenerator)).prompts.map(prompt => prompt.text), [autoText])
+assert.deepEqual(extractGenerationMetadata({ format: { tags: { prompt: JSON.stringify(switched.prompt), workflow: JSON.stringify(switched.workflow) } } }).prompts.map(prompt => prompt.text), [autoText])
 const comfyResult = extractGenerationMetadata(comfyProbe(graphFixture))
 assert.deepEqual(comfyResult.prompts.map(prompt => [prompt.kind, prompt.text]), [['positive', 'Positive\nSecond line'], ['negative', 'Blurry']])
 assert.deepEqual(comfyResult.warnings, [])

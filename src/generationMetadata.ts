@@ -39,7 +39,31 @@ function addPrompt(result: GenerationMetadata, kind: ExtractedPrompt['kind'], va
   if (!result.prompts.some(prompt => prompt.kind === kind && prompt.text === value)) result.prompts.push({ kind, text: value, source })
 }
 
-function extractComfy(nodes: Graph, result: GenerationMetadata) {
+function extractComfy(nodes: Graph, result: GenerationMetadata, savedWorkflow: unknown) {
+  const decodedWorkflow = decode(savedWorkflow)
+  const displayNodes = record(decodedWorkflow) && Array.isArray(decodedWorkflow.nodes) ? decodedWorkflow.nodes : []
+  function booleanFrom(value: unknown, visited = new Set<string>()): boolean | undefined {
+    if (typeof value === 'boolean') return value
+    const id = link(value, nodes)
+    if (!id || visited.has(id) || visited.size > 64 || (value as unknown[])[1] !== 0) return undefined
+    visited.add(id)
+    const node = nodes[id]
+    if (!/^(Bool|Boolean|PrimitiveBoolean|PrimitiveNode|Boolean \[Crystools\])$/i.test(node.class_type)) return undefined
+    return booleanFrom(node.inputs.value ?? node.inputs.boolean, visited)
+  }
+  function switchBranch(node: GraphNode): { input: unknown; resolved: boolean } | null {
+    if (!/^Switch (any|string|conditioning) \[Crystools\]$/i.test(node.class_type)) return null
+    const condition = booleanFrom(node.inputs.boolean)
+    return { input: condition === undefined ? undefined : node.inputs[condition ? 'on_true' : 'on_false'], resolved: condition !== undefined }
+  }
+  function savedDisplayText(id: string, node: GraphNode): string | null {
+    const saved = displayNodes.find(value => record(value) && String(value.id) === id && value.type === node.class_type)
+    if (!record(saved)) return null
+    let value: unknown = saved.widgets_values
+    // Easy Use saves a single output as [text] or [[text]], depending on its version.
+    for (let depth = 0; depth < 4 && Array.isArray(value) && value.length === 1; depth++) value = value[0]
+    return typeof value === 'string' && value.trim() ? value : null
+  }
   const outputs = Object.keys(nodes).filter(id => /^(VHS_VideoCombine|SaveVideo|SaveAnimatedWEBP|SaveAnimatedPNG)$/i.test(nodes[id].class_type))
   if (!outputs.length) {
     result.warnings.push('No supported video output node was found. The execution graph is available in raw metadata.')
@@ -51,7 +75,10 @@ function extractComfy(nodes: Graph, result: GenerationMetadata) {
     const id = pending.pop()!
     if (reachable.has(id)) continue
     reachable.add(id)
-    for (const input of Object.values(nodes[id].inputs)) {
+    const branch = switchBranch(nodes[id])
+    // Inactive switch branches must not contribute prompts elsewhere in the graph.
+    const inputs = branch ? [nodes[id].inputs.boolean, ...(branch.resolved ? [branch.input] : [])] : Object.values(nodes[id].inputs)
+    for (const input of inputs) {
       const upstream = link(input, nodes)
       if (upstream) pending.push(upstream)
     }
@@ -68,12 +95,33 @@ function extractComfy(nodes: Graph, result: GenerationMetadata) {
     // Zeroed conditioning does not contribute a text prompt.
     if (node.class_type === 'ConditioningZeroOut') return
     const label = `${node._meta?.title || node.class_type} (node ${id})`
+    const branch = switchBranch(node)
+    if (branch) {
+      if (!branch.resolved || branch.input === undefined || (value as unknown[])[1] !== 0) {
+        result.warnings.push(`Cannot determine the selected prompt branch of ${label}.`)
+        return
+      }
+      textFrom(branch.input, kind, `${source} → ${label}`, depth + 1)
+      return
+    }
+    if (node.class_type === 'easy showAnything') {
+      if ((value as unknown[])[1] !== 0) { result.warnings.push(`Cannot resolve this output of ${label}.`); return }
+      const saved = savedDisplayText(id, node)
+      if (saved !== null) {
+        addPrompt(result, kind, saved, `${label} → displayed text saved in workflow`)
+      } else if (!Object.hasOwn(node.inputs, 'anything') && typeof node.inputs.text === 'string') {
+        addPrompt(result, kind, node.inputs.text, label)
+      } else {
+        result.warnings.push(`No generated text was saved for ${label}. The prompt idea cannot reconstruct the generated prompt.`)
+      }
+      return
+    }
     const fields = Object.entries(node.inputs).filter(([name]) => /^(text(?:_[gl])?|prompt|value|string|positive|positive_prompt|negative|negative_prompt|conditioning(?:_\d+)?)$/i.test(name))
     if (!fields.length) {
       result.warnings.push(`Cannot resolve prompt through ${label}.`)
       return
     }
-    if (!/^(Text|PrimitiveNode|PrimitiveString(?:Multiline)?|CLIPTextEncode(?:SDXL|SDXLRefiner)?|ConditioningCombine|ConditioningConcat|ConditioningAverage|MiniMaxH3ImageToVideo)$/i.test(node.class_type)) {
+    if (!/^(Text|PrimitiveNode|PrimitiveString(?:Multiline)?|CLIPTextEncode(?:SDXL|SDXLRefiner)?|ConditioningCombine|ConditioningConcat|ConditioningAverage|MiniMaxH3(?:ImageToVideo|ReferenceToVideo))$/i.test(node.class_type)) {
       result.warnings.push(`${label} may transform the text. The displayed text is its input, not a reconstructed output.`)
     }
     for (const [name, input] of fields) textFrom(input, /negative/i.test(name) ? 'negative' : kind, label, depth + 1)
@@ -97,6 +145,8 @@ export function extractGenerationMetadata(probe: ProbeMetadata): GenerationMetad
   const tags = [probe.format?.tags, ...(probe.streams ?? []).map(stream => stream.tags)].filter(Boolean)
   let candidate = false
   for (const scope of tags) {
+    // Some writers store workflow and execution graph in separate tags.
+    const separateWorkflow = Object.entries(scope!).find(([key]) => key.toLowerCase() === 'workflow')?.[1]
     for (const [originalKey, raw] of Object.entries(scope!)) {
       const key = originalKey.toLowerCase()
       if (!['comment', 'description', 'prompt', 'workflow', 'parameters'].includes(key)) continue
@@ -108,7 +158,7 @@ export function extractGenerationMetadata(probe: ProbeMetadata): GenerationMetad
         detected.add('ComfyUI')
         result.format = 'ComfyUI'
         const execution = directGraph ?? nestedGraph
-        if (execution) { hasExecution = true; extractComfy(execution, result) }
+        if (execution) { hasExecution = true; extractComfy(execution, result, record(payload) ? payload.workflow ?? separateWorkflow : separateWorkflow) }
         continue
       }
       if (record(payload) && (typeof payload.type === 'string' && /^Wan(?:2)?GP\b/i.test(payload.type))) {

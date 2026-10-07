@@ -12,6 +12,7 @@ A local desktop app for browsing folders and inspecting video metadata. Built wi
 - Create a subfolder directly from the media file list.
 - Click a video to see container, video, audio, and embedded tag metadata.
 - See and copy positive and negative generation prompts in the Inspector. Embedded WAN2GP JSON and ComfyUI execution graphs are detected; ComfyUI extraction follows active output connections. Unknown formats, missing prompts, and unsupported text transformations are explained. Sidecar files and workflow-only prompt reconstruction are not supported yet.
+- ComfyUI Crystools prompt switches follow the selected manual/automatic branch. Easy Use display nodes can supply generated text saved in the embedded workflow; this text is labelled with its saved source. If generated output is missing, Framewise explains the limitation instead of substituting a prompt idea or an inactive manual prompt. MiniMax H3 Reference-to-Video conditioning is supported.
 - See a thumbnail in the Inspector and click Play to watch the video in the same space.
 - Double-click a video in List or Grid view to start it in the Inspector. Press Enter on a focused video to toggle playback between playing and paused. A collapsed Inspector opens automatically.
 - Right-click a video to move it to the system Trash or Recycle Bin after confirmation.
