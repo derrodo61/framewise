@@ -827,10 +827,10 @@ function App() {
       if (entry && !event.repeat) void moveEntryToTrash(entry)
       return
     }
-    if (event.key === 'Enter') {
+    if (event.key === 'Enter' || event.key === ' ') {
       const entry = mediaEntries[Number(focused.dataset.entryIndex)]
       if (entry && !entry.isDirectory) {
-        // Prevent the button's default click from clearing the playback request.
+        // Prevent Space scrolling or a button click from clearing the playback request.
         event.preventDefault()
         if (!event.repeat) playMediaEntry(entry, 'toggle')
       }
@@ -1039,7 +1039,7 @@ function App() {
               <Icon name="chevron" size={16} />
             </button>)}
             {resultsReady && videoCount === 0 && (workspace || tagFilter.active) ? <div className="empty-list">{workspaceSearch.error && workspace ? 'Workspace results are unavailable.' : tagFilter.error ? 'Tag results are unavailable. Clear filters to browse all videos.' : workspace ? 'No catalogued videos match in this workspace.' : 'No videos match these tags in this folder.'} {tagFilter.active && <button className="clear-tag-empty" onClick={() => changeTagFilters([], tagFilter.matchAll)}>Clear filters</button>}</div> : !workspace && listing.entries.length === 0 && <div className="empty-list">No folders or supported video files here.</div>}
-            {(listing.parent || listing.entries.length > 0) && <div className="file-list-tip">Tip: Ctrl-click (⌘-click on Mac) or Shift-click to select several videos or folders. Right-click selected videos to edit their tags together. A normal click opens a folder.</div>}
+            {(listing.parent || listing.entries.length > 0) && <div className="file-list-tip">Tip: Enter or Space plays/pauses a video. Ctrl-click (⌘-click on Mac) or Shift-click selects several videos or folders. Right-click selected videos to edit their tags together. A normal click opens a folder.</div>}
           </div>
           {workspace && workspaceSearch.total > 200 && <div className="workspace-pagination" aria-label="Workspace result pages"><button disabled={!resultsReady || workspaceSearch.page === 0} onClick={() => changeSearchPage(workspaceSearch.page - 1)}>Previous</button><span>Page {workspaceSearch.page + 1} of {Math.ceil(workspaceSearch.total / 200)} · {workspaceSearch.total} results</span><button disabled={!resultsReady || (workspaceSearch.page + 1) * 200 >= workspaceSearch.total} onClick={() => changeSearchPage(workspaceSearch.page + 1)}>Next</button></div>}
         </>}
