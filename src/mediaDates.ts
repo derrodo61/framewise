@@ -1,6 +1,15 @@
 export type DateFilterState = { field: 'modified' | 'created'; preset: 'all' | 'today' | 'yesterday' | '7' | '30' | 'custom'; from: string; to: string }
 export type DateBounds = { field: 'modified' | 'created'; from: number | null; to: number | null; error: string | null }
 export const emptyDateFilter: DateFilterState = { field: 'modified', preset: 'all', from: '', to: '' }
+export function restoreDateFilter(raw: string | null): { root: string | null; value: DateFilterState } {
+  try {
+    const saved = JSON.parse(raw ?? 'null')
+    const value = saved?.value
+    if (typeof saved?.root === 'string' && value && ['modified', 'created'].includes(value.field)
+      && ['all', 'today', 'yesterday', '7', '30', 'custom'].includes(value.preset) && typeof value.from === 'string' && typeof value.to === 'string') return { root: saved.root, value }
+  } catch { /* Invalid preferences do not become active filters. */ }
+  return { root: null, value: emptyDateFilter }
+}
 function localDate(value: string): Date | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
   const [year, month, day] = value.split('-').map(Number)

@@ -12,7 +12,7 @@ import TagSettings from './TagSettings'
 import AppVersion from './AppVersion'
 import TagFilter from './TagFilter'
 import { useTagFilter } from './useTagFilter'
-import { filterMedia, visibleSelection, parentPath, sameParent } from './mediaFilter'
+import { filterMedia, visibleSelection, parentPath, sameParent, shownFilePaths } from './mediaFilter'
 import { useWorkspaceSearch } from './useWorkspaceSearch'
 import { VideoTags, TagBatchDialog } from './VideoTags'
 import type { NamedTagVideo } from './VideoTags'
@@ -20,7 +20,7 @@ import MediaThumbnail from './MediaThumbnail'
 import ImagePreview from './ImagePreview'
 import { isImage, filterMediaTypes } from './mediaTypes'
 import DateFilter from './DateFilter'
-import { dateBounds, emptyDateFilter, filterMediaDates } from './mediaDates'
+import { dateBounds, emptyDateFilter, filterMediaDates, restoreDateFilter } from './mediaDates'
 import type { DateFilterState } from './mediaDates'
 import { useLocalDay } from './useLocalDay'
 import { generateThumbnail } from './thumbnailQueue'
@@ -41,7 +41,7 @@ import './media-view.css'
 
 type FileEntry = { name: string; path: string; isDirectory: boolean; size: number | null; modifiedAt: number | null; createdAt?: number | null; videoId?: number | null }
 type DirectoryListing = { path: string; parent: string | null; entries: FileEntry[]; catalogWarning?: string }
-type TrashBatchResult = { listing: DirectoryListing; movedCount: number; error: string | null }
+type TrashBatchResult = { listing: DirectoryListing; movedCount: number; error: string | null; remainingPaths?: string[] }
 type DuplicateResult = { listing: DirectoryListing; duplicatedPath: string }
 type RenameResult = { listing: DirectoryListing; renamedPath: string }
 type CreatedFolder = { listing: DirectoryListing; createdPath: string }
@@ -232,8 +232,11 @@ function App() {
   const [listing, setListing] = useState<DirectoryListing | null>(null)
   const [showVideos, setShowVideos] = useState(() => getPreference('framewise.showVideos') !== 'false')
   const [showImages, setShowImages] = useState(() => getPreference('framewise.showImages') !== 'false')
-  const [dateScope, setDateScope] = useState({ root, value: emptyDateFilter })
-  if (dateScope.root !== root) setDateScope({ root, value: emptyDateFilter })
+  const [dateScope, setDateScope] = useState(() => restoreDateFilter(getPreference('framewise.dateFilter')))
+  if (root !== null && dateScope.root !== root) setDateScope({ root, value: emptyDateFilter })
+  useEffect(() => {
+    if (root !== null && dateScope.root === root) setPreference('framewise.dateFilter', JSON.stringify(dateScope))
+  }, [root, dateScope])
   const localDay = useLocalDay()
   const dates = useMemo(() => dateBounds(dateScope.value, localDay), [dateScope.value, localDay])
   const sortedMediaEntries = useMemo(() => filterMediaDates(filterMediaTypes(sortMedia(listing?.entries ?? [], mediaSort, sortDirection), showVideos, showImages), dates), [listing, mediaSort, sortDirection, showVideos, showImages, dates])
@@ -659,6 +662,21 @@ function App() {
     if (!preserveMulti) setSelectedPaths(entry ? [entry.path] : [])
     setSelected(null); setProbe(null); setError(null); setLoading(false)
   }
+  function selectAllShownFiles() {
+    if (!resultsReady || deleting || renaming || duplicatingFile || renameTarget || trashRequestPending.current) return
+    const paths = shownFilePaths(mediaEntries)
+    if (!paths.length) return
+    setContextMenu(null)
+    setSelectedPaths(paths)
+    selectionAnchor.current = paths[0]
+    const entry = selected && paths.includes(selected.path) ? selected : mediaEntries.find(item => item.path === paths[0])!
+    if (selected?.path !== entry.path) inspectSelection(entry, true)
+    window.requestAnimationFrame(() => Array.from(fileListRef.current?.querySelectorAll<HTMLButtonElement>('[data-list-row]') ?? []).find(row => row.dataset.path === entry.path)?.focus())
+  }
+  function clearFileSelection() {
+    setContextMenu(null); setPlaybackRequest(null); selectionAnchor.current = null; pendingFocus.current = null
+    inspectSelection(undefined)
+  }
 
   function selectMediaEntry(entry: FileEntry, index: number, modifiers: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) {
     const additive = modifiers.ctrlKey || modifiers.metaKey
@@ -792,17 +810,21 @@ function App() {
     setContextMenu(null)
     const paths = file.isDirectory ? [] : selectedPaths.includes(file.path) ? selectedPaths : [file.path]
     const count = paths.length
-    if (!sameParent(paths)) {
+    const visibleFiles = mediaEntries.filter(entry => !entry.isDirectory && paths.includes(entry.path))
+    if (!file.isDirectory && (!resultsReady || dates.error || visibleFiles.length !== count)) {
       trashRequestPending.current = false
-      setFileAction({ message: 'Select files from one folder at a time to move them to Trash. Batch tagging works across folders.', error: true })
+      setFileAction({ message: 'The selection no longer matches the displayed results. Refresh and select the files again. No files were deleted.', error: true })
       return
     }
+    const selectedDates = visibleFiles.map(entry => dates.field === 'created' ? entry.createdAt : entry.modifiedAt).filter((value): value is number => value != null)
+    const dateSpan = selectedDates.length ? `${new Date(selectedDates.reduce((a, b) => Math.min(a, b))).toLocaleDateString()} – ${new Date(selectedDates.reduce((a, b) => Math.max(a, b))).toLocaleDateString()}` : 'Unavailable'
+    const dateSummary = `\n\nDate filter: ${dateScope.value.field === 'created' ? 'Created' : 'Modified'} · ${dateScope.value.preset === 'all' ? 'All dates' : dateScope.value.preset === 'custom' ? `${dateScope.value.from || 'Any'} to ${dateScope.value.to || 'Any'}` : dateScope.value.preset === '7' ? 'Last 7 days' : dateScope.value.preset === '30' ? 'Last 30 days' : dateScope.value.preset}.\nSelected file dates: ${dateSpan}${selectedDates.length < count ? ` (${count - selectedDates.length} unavailable)` : ''}.`
     try {
       const approved = await ask(file.isDirectory
         ? `Move folder “${file.name}” and everything inside it to Trash? You can restore it from your system's Trash or Recycle Bin.`
         : count === 1
           ? `Move “${file.name}” to Trash? You can restore it from your system's Trash or Recycle Bin.`
-          : `Move ${count} selected files to Trash? You can restore them from your system's Trash or Recycle Bin.`,
+          : `Move ${count} selected files to Trash? You can restore them from your system's Trash or Recycle Bin.${dateSummary}`,
       { title: file.isDirectory ? 'Move folder to Trash' : count === 1 ? 'Move file to Trash' : `Move ${count} files to Trash`, kind: 'warning', okLabel: 'Move to Trash', cancelLabel: 'Cancel' })
       if (!approved) return
       setDeleting(true)
@@ -811,8 +833,16 @@ function App() {
       flushSync(() => { setSelected(null); setProbe(null); setError(null); setLoading(false) })
       const result: TrashBatchResult = file.isDirectory
         ? { listing: await invoke<DirectoryListing>('move_folder_to_trash', { path: file.path }), movedCount: 1, error: null }
-        : await invoke<TrashBatchResult>('move_videos_to_trash', { paths })
+        : await invoke<TrashBatchResult>('move_videos_to_trash', { paths, filter: { expectedRoot: root, date: { field: dates.field, from: dates.from, to: dates.to }, showVideos, showImages } })
       if (currentRequest !== requestId.current) return
+      if (workspace && !file.isDirectory) {
+        const remaining = (result.remainingPaths ?? []).filter(path => mediaEntries.some(entry => entry.path === path))
+        pendingFocus.current = null
+        setSelectedPaths(remaining); selectionAnchor.current = null
+        setTagRevision(value => value + 1)
+        setFileAction({ message: result.error ? `Moved ${result.movedCount} of ${count} files to Trash. ${result.error}` : `Moved ${result.movedCount} ${result.movedCount === 1 ? 'file' : 'files'} to Trash.`, error: !!result.error })
+        return
+      }
       const next = result.listing
       const oldIndex = mediaEntries.findIndex(entry => entry.path === file.path)
       const nextEntries = workspace
@@ -844,6 +874,11 @@ function App() {
   }
 
   function navigateFiles(event: KeyboardEvent<HTMLDivElement>) {
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'a') {
+      event.preventDefault()
+      if (!event.repeat) selectAllShownFiles()
+      return
+    }
     const focused = event.target instanceof HTMLElement ? event.target.closest<HTMLButtonElement>('[data-list-row]') : null
     if (!focused || !event.currentTarget.contains(focused)) return
     if (event.key === 'Delete' || (event.key === 'Backspace' && /Mac/i.test(navigator.platform))) {
@@ -1044,7 +1079,7 @@ function App() {
             {(workspaceSearch.scanError || workspaceSearch.error) && <p role="alert">{workspaceSearch.scanError || workspaceSearch.error}</p>}
             <p>Results show catalogued media, including previously discovered files. Scan to refresh files added or removed outside Framewise.</p>
           </div>}
-          <div className="browser-toolbar"><span>{workspace ? 'Workspace results' : `${directoryCount} ${directoryCount === 1 ? 'folder' : 'folders'}`} <span className="dot-separator">·</span> {!resultsReady ? 'Loading results…' : `${videoCount} ${videoCount === 1 ? 'file' : 'files'}${workspace ? ' on this page' : ''}`}{selectedPaths.length > 1 && <> <span className="dot-separator">·</span> {selectedPaths.length} selected</>}</span><div className="browser-toolbar-actions">{!workspace && <button className="browser-new-folder" onClick={() => setCreatingFolder(true)} disabled={folderBusy || creatingFolder}>+ New folder</button>}<button title={workspace ? 'Refresh workspace results' : 'Refresh folder'} aria-label={workspace ? 'Refresh workspace results' : 'Refresh folder'} onClick={() => workspace ? setTagRevision(value => value + 1) : browse(listing.path, selected ? { path: selected.path } : {})}><Icon name="refresh" size={17} /></button></div></div>
+          <div className="browser-toolbar"><span>{workspace ? 'Workspace results' : `${directoryCount} ${directoryCount === 1 ? 'folder' : 'folders'}`} <span className="dot-separator">·</span> {!resultsReady ? 'Loading results…' : `${videoCount} ${videoCount === 1 ? 'file' : 'files'}${workspace ? ' on this page' : ''}`}{selectedPaths.length > 1 && <> <span className="dot-separator">·</span> {selectedPaths.length} selected</>}</span><div className="browser-toolbar-actions"><button className="selection-action" title={workspace ? 'Select the files on this result page, excluding folders' : 'Select all files matching the current filters, excluding folders'} onClick={selectAllShownFiles} disabled={!resultsReady || videoCount === 0 || deleting || renaming || !!duplicatingFile || !!renameTarget}>Select all shown</button><button className="selection-action" onClick={clearFileSelection} disabled={selectedPaths.length === 0 || deleting || renaming || !!duplicatingFile || !!renameTarget}>Clear selection</button>{!workspace && <button className="browser-new-folder" onClick={() => setCreatingFolder(true)} disabled={folderBusy || creatingFolder}>+ New folder</button>}<button title={workspace ? 'Refresh workspace results' : 'Refresh folder'} aria-label={workspace ? 'Refresh workspace results' : 'Refresh folder'} onClick={() => workspace ? setTagRevision(value => value + 1) : browse(listing.path, selected ? { path: selected.path } : {})}><Icon name="refresh" size={17} /></button></div></div>
           {creatingFolder && <form className="browser-create-folder" onSubmit={event => { event.preventDefault(); void createMediaFolder() }}><input autoFocus aria-label="New folder name" placeholder="New folder name" value={newFolderName} onChange={event => setNewFolderName(event.target.value)} disabled={folderBusy} /><button type="submit" disabled={folderBusy || !newFolderName.trim()}>{folderBusy ? 'Creating…' : 'Create'}</button><button type="button" onClick={() => { setCreatingFolder(false); setNewFolderName('') }} disabled={folderBusy}>Cancel</button></form>}
           {duplicatingFile && <div className="file-action progress" role="status">Duplicating “{duplicatingFile}”…</div>}
           {deleting && <div className="file-action progress" role="status">Moving to Trash…</div>}

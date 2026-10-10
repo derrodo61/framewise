@@ -157,6 +157,14 @@ fn search_types_on(connection: &mut Connection, root: &Path, tags: &[i64], match
 }
 #[derive(serde::Deserialize)]
 pub(crate) struct DateRange { field: String, from: Option<i64>, to: Option<i64> }
+impl DateRange {
+    pub(crate) fn matches(&self, modified: Option<i64>, created: Option<i64>) -> Result<bool, String> {
+        if self.from.zip(self.to).is_some_and(|(from, to)| from >= to) { return Err("Invalid date range; no files were deleted.".into()); }
+        let value = match self.field.as_str() { "created" => created, "modified" => modified, _ => return Err("Unsupported date field; no files were deleted.".into()) };
+        if self.from.is_none() && self.to.is_none() { return Ok(true); }
+        Ok(value.is_some_and(|value| self.from.is_none_or(|from| value >= from) && self.to.is_none_or(|to| value < to)))
+    }
+}
 impl Default for DateRange { fn default() -> Self { Self { field: "modified".into(), from: None, to: None } } }
 #[allow(clippy::too_many_arguments)]
 fn search_dates_on(connection: &mut Connection, root: &Path, tags: &[i64], match_all: bool, sort: &str, descending: bool, page: usize, types: (bool, bool), dates: &DateRange) -> Result<SearchPage, String> {
@@ -200,6 +208,19 @@ pub(crate) struct WorkspaceQuery { expected_root: String, tag_ids: Vec<i64>, mat
 mod tests {
     use super::*;
     use crate::database::{open_at, tests::Fixture};
+    #[test]
+    fn trash_date_guard_rejects_other_days_and_unknown_or_invalid_dates() {
+        let today = DateRange { field: "modified".into(), from: Some(2000), to: Some(3000) };
+        assert!(!today.matches(Some(1999), Some(2500)).unwrap());
+        assert!(today.matches(Some(2000), None).unwrap());
+        assert!(!today.matches(Some(3000), None).unwrap());
+        assert!(!today.matches(None, Some(2500)).unwrap());
+        let created = DateRange { field: "created".into(), from: Some(2000), to: Some(3000) };
+        assert!(!created.matches(Some(2500), Some(1999)).unwrap());
+        assert!(created.matches(None, Some(2500)).unwrap());
+        assert!(!created.matches(Some(2500), None).unwrap());
+        assert!(DateRange { field: "created".into(), from: Some(3000), to: Some(2000) }.matches(Some(2500), Some(2500)).is_err());
+    }
     fn job(root: &Path) -> Job {
         Job { cancelled: AtomicBool::new(false), status: Mutex::new(ScanStatus { id: 1, root: root.to_string_lossy().into_owned(), status: "running".into(), folders: 0, videos: 0, warnings: 0, message: None, current_folder: String::new() }) }
     }

@@ -48,6 +48,7 @@ struct TrashBatchResult {
     listing: DirectoryListing,
     moved_count: usize,
     error: Option<String>,
+    remaining_paths: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -184,11 +185,12 @@ async fn reveal_in_file_manager(path: String, state: tauri::State<'_, AppState>)
 }
 
 #[tauri::command]
-async fn move_videos_to_trash(paths: Vec<String>, state: tauri::State<'_, AppState>) -> Result<TrashBatchResult, String> {
+async fn move_videos_to_trash(paths: Vec<String>, filter: Option<TrashFilter>, state: tauri::State<'_, AppState>) -> Result<TrashBatchResult, String> {
     if paths.is_empty() {
         return Err("Select at least one video".into());
     }
     let root = selected_root(&state)?;
+    if filter.as_ref().is_some_and(|filter| filter.expected_root != root.to_string_lossy()) { return Err("Workspace changed; no files were deleted.".into()); }
     let mut files = Vec::new();
     let mut seen = HashSet::new();
     let mut parent: Option<PathBuf> = None;
@@ -203,11 +205,15 @@ async fn move_videos_to_trash(paths: Vec<String>, state: tauri::State<'_, AppSta
         if !media_file(&resolved) {
             return Err("Select supported media files".into());
         }
-        let folder = resolved.parent().ok_or("Cannot find the video's folder")?;
-        if parent.as_deref().is_some_and(|current| current != folder) {
-            return Err("Selected files must be in the same folder".into());
+        if let Some(filter) = &filter {
+            let metadata = fs::metadata(&resolved).map_err(|error| error.to_string())?;
+            let modified = metadata.modified().ok().and_then(|time| time.duration_since(UNIX_EPOCH).ok()).and_then(|time| i64::try_from(time.as_millis()).ok());
+            let created = metadata.created().ok().and_then(|time| time.duration_since(UNIX_EPOCH).ok()).and_then(|time| i64::try_from(time.as_millis()).ok());
+            let enabled = if image_file(&resolved) { filter.show_images } else { filter.show_videos };
+            if !enabled || !filter.date.matches(modified, created)? { return Err("A selected file does not match the active date/type filters. No files were deleted. Refresh and select again.".into()); }
         }
-        parent = Some(folder.to_path_buf());
+        let folder = resolved.parent().ok_or("Cannot find the video's folder")?;
+        if parent.is_none() { parent = Some(folder.to_path_buf()); }
         if seen.insert(resolved.clone()) {
             files.push(resolved);
         }
@@ -228,10 +234,14 @@ async fn move_videos_to_trash(paths: Vec<String>, state: tauri::State<'_, AppSta
             }
         }
         if let Err(cause) = operation.finish() { error = Some(match error { Some(original) => format!("{original} {cause}"), None => cause }); }
+        let remaining_paths = files.iter().filter(|file| !matches!(fs::symlink_metadata(file), Err(cause) if cause.kind() == io::ErrorKind::NotFound)).map(|file| file.to_string_lossy().into_owned()).collect();
         let listing = catalogued_folder(&parent, &root)?;
-        Ok(TrashBatchResult { listing, moved_count, error })
+        Ok(TrashBatchResult { listing, moved_count, error, remaining_paths })
     }).await.map_err(|error| format!("Trash operation failed: {error}"))?
 }
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrashFilter { expected_root: String, date: workspace_search::DateRange, show_videos: bool, show_images: bool }
 
 #[tauri::command]
 async fn move_folder_to_trash(path: String, state: tauri::State<'_, AppState>) -> Result<DirectoryListing, String> {

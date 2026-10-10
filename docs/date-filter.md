@@ -1,6 +1,6 @@
 # Date filtering
 
-Implemented on `codex/image-support`; awaiting user testing.
+Implemented on `codex/image-support`. User verified filtered selection/deletion, yesterday's remaining files, and the resulting Explorer/Recycle Bin contents.
 
 - Modified date is the default; Created uses filesystem creation time, not embedded generation metadata.
 - Presets: Today, Yesterday, Last 7 days, Last 30 days, All dates.
@@ -10,8 +10,10 @@ Implemented on `codex/image-support`; awaiting user testing.
 - Dates combine with tags and media types. Workspace counts and pagination apply the date predicate before loading results. Criteria follow folder browsing and reset when changing workspace.
 - Catalog schema 5 adds nullable creation timestamps with an automatic consistent backup. Previously catalogued creation timestamps fill when browsing or scanning; unknown dates are never invented. Rename/move/copy/restore refresh timestamps from the current filesystem.
 - Inspector displays Created and Modified in local time.
+- The selected date filter is saved for the current workspace across app/dev restarts. A workspace change still resets it.
+- Trash checks every selected file against the active date and type filters on the backend before deleting any file. Bulk confirmation shows the date filter and actual selected-date span; hidden or stale selections are rejected.
 
-Checks passed: frontend build/lint/tests; 62 Rust tests; Clippy with warnings denied. Date tests cover presets, same-day/open/custom ranges, invalid dates, inclusive lower/exclusive upper boundaries, DST changes, unknown creation dates, migration identity/tag preservation and workspace paging.
+Checks passed: frontend build/lint/tests; 64 Rust tests; Clippy with warnings denied. Date tests cover presets, same-day/open/custom ranges, invalid dates, inclusive lower/exclusive upper boundaries, DST changes, unknown creation dates, migration identity/tag preservation and workspace paging. Additional checks cover persisted filters, filtered selection, cross-folder partial Trash success, and backend date guards.
 
 Manual checkpoint:
 

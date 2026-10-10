@@ -55,6 +55,22 @@ fn image_copy_move_and_trash_restore_keep_kind_and_assignments() {
     fs::rename(&backup, &moved).unwrap();
     assert_eq!(ensure_observed_on(&connection, &observe(&moved).unwrap()).unwrap(), id);
 }
+#[test]
+fn cross_folder_trash_tracks_partial_success_without_losing_remaining_tags() {
+    let fixture = Fixture::new();
+    let mut connection = open_at(&fixture.path).unwrap();
+    let first = fixture.folder.join("a/photo.jpg");
+    let second = fixture.folder.join("b/clip.mp4");
+    let first_id = seed(&mut connection, &first);
+    let second_id = seed(&mut connection, &second);
+    let operation = start(&mut connection, &fixture, Action::Trash, vec![first.clone(), second.clone()], vec![None, None]);
+    fs::rename(&first, fixture.folder.join("simulated-trash.jpg")).unwrap();
+    finish(&mut connection, &operation);
+    assert_eq!(connection.query_row("SELECT status FROM videos WHERE id=?1", [first_id], |row| row.get::<_, String>(0)).unwrap(), "trashed");
+    assert_eq!(active_id(&connection, &second), second_id);
+    assert_eq!(tags(&connection, first_id), 1);
+    assert_eq!(tags(&connection, second_id), 1);
+}
 fn status(connection: &Connection, id: i64) -> String {
     connection.query_row("SELECT status FROM videos WHERE id=?1", [id], |row| row.get(0)).unwrap()
 }
