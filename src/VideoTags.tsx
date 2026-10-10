@@ -27,7 +27,11 @@ export function VideoTags({ videos, refreshToken = 0, onChanged, onBusyChange }:
   const [notice, setNotice] = useState<string | null>(null)
   const [chosenTags, setChosenTags] = useState<number[]>([])
   const [tagQuery, setTagQuery] = useState('')
-  const [newName, setNewName] = useState('')
+  const [showAll, setShowAll] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const picker = useRef<HTMLDivElement>(null)
+  const addButton = useRef<HTMLButtonElement>(null)
+  const search = useRef<HTMLInputElement>(null)
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
   useEffect(() => {
     let active = true
@@ -39,6 +43,34 @@ export function VideoTags({ videos, refreshToken = 0, onChanged, onBusyChange }:
     return () => { active = false }
   }, [targets, revision, refreshToken])
 
+  function closePicker() { picker.current?.hidePopover(); addButton.current?.focus() }
+  function openPicker() {
+    const element = picker.current
+    const button = addButton.current
+    if (!element || !button) return
+    if (element.matches(':popover-open')) { closePicker(); return }
+    const bounds = button.getBoundingClientRect()
+    const width = Math.min(360, window.innerWidth - 24)
+    element.style.width = `${width}px`
+    element.style.maxHeight = `${window.innerHeight - 24}px`
+    element.style.left = `${Math.max(12, Math.min(bounds.left, window.innerWidth - width - 12))}px`
+    element.style.top = `${bounds.bottom + 6}px`
+    element.showPopover()
+    const height = element.getBoundingClientRect().height
+    if (bounds.bottom + 6 + height > window.innerHeight - 12) {
+      element.style.top = `${Math.max(12, bounds.top - height - 6)}px`
+    }
+    search.current?.focus()
+  }
+  useEffect(() => {
+    const dismiss = () => picker.current?.hidePopover()
+    const dismissOnScroll = (event: Event) => {
+      if (event.target instanceof Node && !picker.current?.contains(event.target)) dismiss()
+    }
+    window.addEventListener('scroll', dismissOnScroll, true)
+    window.addEventListener('resize', dismiss)
+    return () => { window.removeEventListener('resize', dismiss); window.removeEventListener('scroll', dismissOnScroll, true) }
+  }, [])
   function refresh() { setLoading(true); setError(null); setRevision(value => value + 1) }
   async function mutate(command: string, args: Record<string, unknown>, message: string) {
     if (busy || loading) return
@@ -48,7 +80,9 @@ export function VideoTags({ videos, refreshToken = 0, onChanged, onBusyChange }:
       const result = await invoke<TagSelection>(command, { videos: targets, ...args })
       if (alive.current) {
         request.current++
-        setSnapshot(result); setLoading(false); setChosenTags([]); setTagQuery(''); setNewName(''); setNotice(message); onChanged()
+        setSnapshot(result); setLoading(false); setTagQuery(''); setNotice(message); onChanged()
+        if (command !== 'create_and_assign_tag') setChosenTags([])
+        if (command === 'add_video_tags') closePicker()
       }
     } catch (cause) {
       if (alive.current) { setError(report(cause)); setLoading(true); setRevision(value => value + 1) }
@@ -60,40 +94,48 @@ export function VideoTags({ videos, refreshToken = 0, onChanged, onBusyChange }:
   const available = snapshot?.tags.filter(tag => tag.assignedCount < count) ?? []
   const selectedTags = chosenTags.filter(tagId => available.some(tag => tag.id === tagId))
   const matchingTags = available.filter(tag => tag.name.toLocaleLowerCase().includes(tagQuery.trim().toLocaleLowerCase()))
+  const queryName = tagQuery.trim().replace(/\s+/g, ' ')
+  const exactTag = snapshot?.tags.find(tag => tag.name.normalize('NFKC').toLocaleLowerCase() === queryName.normalize('NFKC').toLocaleLowerCase())
   const disabled = loading || busy || !snapshot
+  const visibleAssigned = showAll ? assigned : assigned.slice(0, 6)
   const addMessage = batch ? `Tag added to all ${count} selected files.` : 'Tag added.'
   const removeMessage = batch ? `Tag removed from all ${count} selected files.` : 'Tag removed.'
 
   return <div className="video-tag-editor" aria-busy={loading || busy}>
-    <p className="video-tag-help">{batch ? `Changes apply to all ${count} selected files.` : 'These tags apply to this file only.'}</p>
+    {batch && <p className="video-tag-help">Changes apply to all {count} selected files.</p>}
     {loading && <p className="video-tag-help" role="status">Loading tags…</p>}
     {busy && <p className="video-tag-help" role="status">Saving tags…</p>}
-    {error && <p className="video-tag-error" role="alert">{error}</p>}
+    {error && <p className="video-tag-error" role="alert">{error} <button disabled={busy || loading} onClick={refresh}>Retry</button></p>}
     {notice && <p className="video-tag-notice" role="status">{notice}</p>}
-    <ul className="assigned-video-tags" aria-label="Assigned tags">
-      {assigned.map(tag => <li key={tag.id}><div className="video-tag-name"><strong>{tag.name}</strong>{batch && <span>{tag.assignedCount === count ? `All (${count})` : `Some (${tag.assignedCount} of ${count})`}</span>}</div><div className="video-tag-actions">
-        {batch && tag.assignedCount < count && <button disabled={disabled} onClick={() => void mutate('set_video_tag', { tagId: tag.id, assigned: true }, addMessage)} aria-label={`Add ${tag.name} to all selected files`}>Add to all</button>}
-        <button disabled={disabled} onClick={() => void mutate('set_video_tag', { tagId: tag.id, assigned: false }, removeMessage)} aria-label={batch ? `Remove ${tag.name} from all selected files` : `Remove tag ${tag.name}`}>{batch ? 'Remove from all' : 'Remove'}</button>
-      </div></li>)}
-    </ul>
-    {!loading && snapshot && assigned.length === 0 && <p className="video-tag-help">{batch ? 'None of these files have tags yet.' : 'No tags assigned yet.'}</p>}
-    <form onSubmit={event => { event.preventDefault(); if (selectedTags.length) void mutate('add_video_tags', { tagIds: selectedTags }, batch ? `${selectedTags.length} tag(s) added to all ${count} selected files.` : `${selectedTags.length} tag(s) added.`) }}>
-      <label htmlFor={`${id}-existing`}>Add existing tags</label>
-      <div className="video-tag-input"><input type="search" id={`${id}-existing`} placeholder="Find tags…" value={tagQuery} onChange={event => setTagQuery(event.target.value)} disabled={disabled || available.length === 0} /></div>
-      <fieldset className="existing-tag-options" disabled={disabled}>
-        <legend className="tag-picker-legend">Choose tags to add</legend>
-        {matchingTags.map(tag => <label key={tag.id}><input type="checkbox" checked={selectedTags.includes(tag.id)} onChange={event => setChosenTags(previous => event.target.checked ? [...new Set([...previous, tag.id])] : previous.filter(id => id !== tag.id))} /><span>{tag.name}{batch && tag.assignedCount > 0 ? ` (${tag.assignedCount} of ${count})` : ''}</span></label>)}
-        {!matchingTags.length && <p className="video-tag-help">{available.length ? 'No tags match your search.' : 'No other tags available.'}</p>}
-      </fieldset>
-      <div className="tag-picker-actions"><span>{selectedTags.length} selected</span><button type="button" disabled={disabled || !selectedTags.length} onClick={() => setChosenTags([])}>Clear selection</button><button type="submit" disabled={disabled || !selectedTags.length}>{batch ? 'Add selected to all' : 'Add selected'}</button></div>
-    </form>
-    <form onSubmit={event => { event.preventDefault(); if (newName.trim()) void mutate('create_and_assign_tag', { name: newName }, addMessage) }}>
-      <label htmlFor={`${id}-new`}>Create and add a tag</label>
-      <div className="video-tag-input"><input id={`${id}-new`} placeholder="Tag name" value={newName} onChange={event => setNewName(event.target.value)} disabled={disabled} /><button type="submit" disabled={disabled || !newName.trim()}>{batch ? 'Add to all' : 'Add'}</button></div>
-      <p className="video-tag-help">An existing name reuses that tag.</p>
-    </form>
-    <button className="video-tag-refresh" onClick={refresh} disabled={busy || loading}>Refresh tags</button>
-    <p className="video-tag-help">Tags are saved locally without changing the media file.</p>
+    <div className="assigned-tag-field">
+      <ul className="assigned-video-tags" aria-label="Assigned tags">
+        {visibleAssigned.map(tag => <li key={tag.id}>
+          <span className="video-tag-name" title={tag.name}>{tag.name}{batch && <span>{tag.assignedCount === count ? `All (${count})` : `${tag.assignedCount} of ${count}`}</span>}</span>
+          {batch && tag.assignedCount < count && <button disabled={disabled} title={`Add ${tag.name} to all selected files`} onClick={() => void mutate('set_video_tag', { tagId: tag.id, assigned: true }, addMessage)} aria-label={`Add ${tag.name} to all selected files`}>+ All</button>}
+          <button className="tag-remove" disabled={disabled} title={batch ? `Remove ${tag.name} from all selected files` : `Remove ${tag.name}`} onClick={() => void mutate('set_video_tag', { tagId: tag.id, assigned: false }, removeMessage)} aria-label={batch ? `Remove ${tag.name} from all selected files` : `Remove tag ${tag.name}`}>×</button>
+        </li>)}
+      </ul>
+      {!loading && snapshot && assigned.length === 0 && <span className="empty-tag-label">No tags assigned</span>}
+      {assigned.length > 6 && <button className="tag-show-all" onClick={() => setShowAll(value => !value)} aria-expanded={showAll}>{showAll ? 'Show fewer' : `+${assigned.length - 6} more`}</button>}
+      <button ref={addButton} className="tag-add-button" disabled={disabled} onClick={openPicker} aria-expanded={pickerOpen} aria-controls={`${id}-picker`}>+ Add tags</button>
+    </div>
+    <div ref={picker} id={`${id}-picker`} popover="auto" className="video-tag-picker video-tag-editor" aria-label="Add tags" aria-busy={busy || loading} onToggle={event => { setPickerOpen(event.newState === 'open'); if (event.newState === 'closed') { setChosenTags([]); setTagQuery('') } }}>
+      <header><strong>Add tags{batch ? ` to ${count} files` : ''}</strong><button type="button" onClick={closePicker} aria-label="Close tag picker">×</button></header>
+      <form onSubmit={event => { event.preventDefault(); if (selectedTags.length) void mutate('add_video_tags', { tagIds: selectedTags }, batch ? `${selectedTags.length} tag(s) added to all ${count} selected files.` : `${selectedTags.length} tag(s) added.`) }}>
+        <label className="tag-picker-legend" htmlFor={`${id}-existing`}>Find or create a tag</label>
+        <div className="video-tag-input"><input ref={search} type="search" id={`${id}-existing`} placeholder="Find or create a tag…" value={tagQuery} onChange={event => setTagQuery(event.target.value)} disabled={disabled} /></div>
+        <fieldset className="existing-tag-options" disabled={disabled}>
+          <legend className="tag-picker-legend">Choose tags to add</legend>
+          {matchingTags.map(tag => <label key={tag.id}><input type="checkbox" checked={selectedTags.includes(tag.id)} onChange={event => setChosenTags(previous => event.target.checked ? [...new Set([...previous, tag.id])] : previous.filter(tagId => tagId !== tag.id))} /><span>{tag.name}{batch && tag.assignedCount > 0 ? ` (${tag.assignedCount} of ${count})` : ''}</span></label>)}
+          {!matchingTags.length && <p className="video-tag-help">{exactTag?.assignedCount === count ? 'This tag is already assigned.' : available.length ? 'No tags match your search.' : 'No other tags available. Type a name to create one.'}</p>}
+        </fieldset>
+        {queryName && !exactTag && <button type="button" className="tag-create-button" disabled={disabled} onClick={() => void mutate('create_and_assign_tag', { name: queryName }, addMessage)}>+ Create “{queryName}”{batch ? ' and add to all' : ' and add'}</button>}
+        <div className="tag-picker-actions"><span>{selectedTags.length} selected</span><button type="button" disabled={disabled || !selectedTags.length} onClick={() => setChosenTags([])}>Clear</button><button type="submit" disabled={disabled || !selectedTags.length}>{batch ? 'Add to all' : 'Add selected'}</button></div>
+      </form>
+      {busy && <p className="video-tag-help" role="status">Saving tags…</p>}
+      {error && <p className="video-tag-error" role="alert">{error}</p>}
+    </div>
+    <p className="video-tag-help tag-storage-note">Tags are saved locally.</p>
   </div>
 }
 
