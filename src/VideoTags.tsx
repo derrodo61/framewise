@@ -61,23 +61,23 @@ export function VideoTags({ videos, refreshToken = 0, onChanged, onBusyChange }:
   const selectedTags = chosenTags.filter(tagId => available.some(tag => tag.id === tagId))
   const matchingTags = available.filter(tag => tag.name.toLocaleLowerCase().includes(tagQuery.trim().toLocaleLowerCase()))
   const disabled = loading || busy || !snapshot
-  const addMessage = batch ? `Tag added to all ${count} selected videos.` : 'Tag added.'
-  const removeMessage = batch ? `Tag removed from all ${count} selected videos.` : 'Tag removed.'
+  const addMessage = batch ? `Tag added to all ${count} selected files.` : 'Tag added.'
+  const removeMessage = batch ? `Tag removed from all ${count} selected files.` : 'Tag removed.'
 
   return <div className="video-tag-editor" aria-busy={loading || busy}>
-    <p className="video-tag-help">{batch ? `Changes apply to all ${count} selected videos.` : 'These tags apply to this video only.'}</p>
+    <p className="video-tag-help">{batch ? `Changes apply to all ${count} selected files.` : 'These tags apply to this file only.'}</p>
     {loading && <p className="video-tag-help" role="status">Loading tags…</p>}
     {busy && <p className="video-tag-help" role="status">Saving tags…</p>}
     {error && <p className="video-tag-error" role="alert">{error}</p>}
     {notice && <p className="video-tag-notice" role="status">{notice}</p>}
     <ul className="assigned-video-tags" aria-label="Assigned tags">
       {assigned.map(tag => <li key={tag.id}><div className="video-tag-name"><strong>{tag.name}</strong>{batch && <span>{tag.assignedCount === count ? `All (${count})` : `Some (${tag.assignedCount} of ${count})`}</span>}</div><div className="video-tag-actions">
-        {batch && tag.assignedCount < count && <button disabled={disabled} onClick={() => void mutate('set_video_tag', { tagId: tag.id, assigned: true }, addMessage)} aria-label={`Add ${tag.name} to all selected videos`}>Add to all</button>}
-        <button disabled={disabled} onClick={() => void mutate('set_video_tag', { tagId: tag.id, assigned: false }, removeMessage)} aria-label={batch ? `Remove ${tag.name} from all selected videos` : `Remove tag ${tag.name}`}>{batch ? 'Remove from all' : 'Remove'}</button>
+        {batch && tag.assignedCount < count && <button disabled={disabled} onClick={() => void mutate('set_video_tag', { tagId: tag.id, assigned: true }, addMessage)} aria-label={`Add ${tag.name} to all selected files`}>Add to all</button>}
+        <button disabled={disabled} onClick={() => void mutate('set_video_tag', { tagId: tag.id, assigned: false }, removeMessage)} aria-label={batch ? `Remove ${tag.name} from all selected files` : `Remove tag ${tag.name}`}>{batch ? 'Remove from all' : 'Remove'}</button>
       </div></li>)}
     </ul>
-    {!loading && snapshot && assigned.length === 0 && <p className="video-tag-help">{batch ? 'None of these videos have tags yet.' : 'No tags assigned yet.'}</p>}
-    <form onSubmit={event => { event.preventDefault(); if (selectedTags.length) void mutate('add_video_tags', { tagIds: selectedTags }, batch ? `${selectedTags.length} tag(s) added to all ${count} selected videos.` : `${selectedTags.length} tag(s) added.`) }}>
+    {!loading && snapshot && assigned.length === 0 && <p className="video-tag-help">{batch ? 'None of these files have tags yet.' : 'No tags assigned yet.'}</p>}
+    <form onSubmit={event => { event.preventDefault(); if (selectedTags.length) void mutate('add_video_tags', { tagIds: selectedTags }, batch ? `${selectedTags.length} tag(s) added to all ${count} selected files.` : `${selectedTags.length} tag(s) added.`) }}>
       <label htmlFor={`${id}-existing`}>Add existing tags</label>
       <div className="video-tag-input"><input type="search" id={`${id}-existing`} placeholder="Find tags…" value={tagQuery} onChange={event => setTagQuery(event.target.value)} disabled={disabled || available.length === 0} /></div>
       <fieldset className="existing-tag-options" disabled={disabled}>
@@ -93,7 +93,7 @@ export function VideoTags({ videos, refreshToken = 0, onChanged, onBusyChange }:
       <p className="video-tag-help">An existing name reuses that tag.</p>
     </form>
     <button className="video-tag-refresh" onClick={refresh} disabled={busy || loading}>Refresh tags</button>
-    <p className="video-tag-help">Tags are saved locally without changing the video file.</p>
+    <p className="video-tag-help">Tags are saved locally without changing the media file.</p>
   </div>
 }
 
@@ -106,8 +106,8 @@ export function TagBatchDialog({ videos, onChanged, onClose }: { videos: NamedTa
     return () => { element?.close() }
   }, [])
   return <dialog ref={dialog} className="video-tag-dialog" aria-labelledby="batch-tags-title" onCancel={event => { event.preventDefault(); if (!busy) onClose() }}>
-    <header><h2 id="batch-tags-title">Edit tags · {videos.length} {videos.length === 1 ? 'video' : 'videos'}</h2><button onClick={onClose} disabled={busy} aria-label="Close tag editor">Close</button></header>
-    <details className="tag-selected-videos"><summary>Selected videos</summary><ul>{videos.map(video => <li key={video.videoId} title={video.path}>{video.name}</li>)}</ul></details>
+    <header><h2 id="batch-tags-title">Edit tags · {videos.length} {videos.length === 1 ? 'file' : 'files'}</h2><button onClick={onClose} disabled={busy} aria-label="Close tag editor">Close</button></header>
+    <details className="tag-selected-videos"><summary>Selected files</summary><ul>{videos.map(video => <li key={video.videoId} title={video.path}>{video.name}</li>)}</ul></details>
     <VideoTags videos={videos.map(({ videoId, path }) => ({ videoId, path }))} onChanged={onChanged} onBusyChange={setBusy} />
     <footer><span>Changes are saved as you make them.</span><button onClick={onClose} disabled={busy}>Done</button></footer>
   </dialog>

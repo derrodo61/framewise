@@ -1,0 +1,9 @@
+.image-preview { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+.image-preview img { width: 100%; max-height: 420px; object-fit: contain; border-radius: 8px; background: #10151e; }
+.image-dimensions { color: #7b899d; font-size: 12px; }
+.image-preview-status { display: block; padding: 18px 10px; font-size: 12px; color: #7b899d; text-align: center; overflow-wrap: anywhere; }
+.image-thumbnail .image-preview-status { font-size: 10px; }
+[data-theme='dark'] .image-dimensions, [data-theme='dark'] .image-preview-status { color: #a9b8ce; }
+.media-type-filters { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin: 12px 0; font-size: 12px; color: #596b84; }
+.media-type-filters label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+[data-theme='dark'] .media-type-filters { color: #a9b8ce; }

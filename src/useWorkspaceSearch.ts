@@ -6,12 +6,12 @@ type Page = { entries: Entry[]; total: number; totalVideos: number; page: number
 type Scan = { id: number; root: string; status: string; folders: number; videos: number; warnings: number; message: string | null; currentFolder: string }
 const empty: Entry[] = []
 
-export function useWorkspaceSearch(root: string | null, enabled: boolean, tagIds: number[], matchAll: boolean, sort: string, descending: boolean, revision: number, listing: object | null) {
+export function useWorkspaceSearch(root: string | null, enabled: boolean, tagIds: number[], matchAll: boolean, sort: string, descending: boolean, revision: number, listing: object | null, showVideos = true, showImages = true) {
   const [scan, setScan] = useState<Scan | null>(null)
   const [restart, setRestart] = useState(0)
   const [scanError, setScanError] = useState<{ root: string; message: string } | null>(null)
   const [result, setResult] = useState<{ key: string; listing: object | null; data: Page | null; error: string | null } | null>(null)
-  const filterKey = JSON.stringify([root, tagIds, matchAll, sort, descending])
+  const filterKey = JSON.stringify([root, tagIds, matchAll, sort, descending, showVideos, showImages])
   const [pageState, setPageState] = useState({ key: filterKey, page: 0 })
   if (pageState.key !== filterKey) setPageState({ key: filterKey, page: 0 })
   const page = pageState.key === filterKey ? pageState.page : 0
@@ -46,11 +46,11 @@ export function useWorkspaceSearch(root: string | null, enabled: boolean, tagIds
   useEffect(() => {
     if (!enabled || !root) return
     let alive = true
-    void invoke<Page>('search_workspace', { expectedRoot: root, tagIds, matchAll, sort, descending, page })
+    void invoke<Page>('search_workspace', { query: { expectedRoot: root, tagIds, matchAll, sort, descending, page, showVideos, showImages } })
       .then(data => { if (alive) setResult({ key, listing, data, error: null }) })
       .catch(cause => { if (alive) setResult({ key, listing, data: null, error: String(cause) }) })
     return () => { alive = false }
-  }, [root, enabled, tagIds, matchAll, sort, descending, page, key, listing])
+  }, [root, enabled, tagIds, matchAll, sort, descending, page, key, listing, showVideos, showImages])
 
   return {
     entries: ready ? result?.data?.entries ?? empty : empty,

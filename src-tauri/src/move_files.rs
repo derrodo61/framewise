@@ -10,7 +10,7 @@ use tauri::Emitter;
 
 use crate::{
     AppState, DirectoryListing, list_folder, relocate_folder_previews, relocate_video_preview, rename::valid_stem,
-    selected_root, thumbnail_name, video_file, within_root,
+    selected_root, thumbnail_name, media_file, within_root,
 };
 
 #[derive(Clone, Default)]
@@ -98,14 +98,14 @@ pub(crate) fn begin_move(
         let kind = fs::symlink_metadata(&path)
             .map_err(|error| format!("Cannot open item: {error}"))?.file_type();
         if !(kind.is_dir() || kind.is_file()) {
-            return Err("Select regular video files or folders only.".into());
+            return Err("Select regular media files or folders only.".into());
         }
         let source = within_root(&path, &state)?;
         if source == root {
             return Err("The workspace root cannot be moved.".into());
         }
-        if kind.is_file() && !video_file(&source) {
-            return Err("Select supported video files only.".into());
+        if kind.is_file() && !media_file(&source) {
+            return Err("Select supported media files only.".into());
         }
         if directories.is_some_and(|value| value != kind.is_dir()) {
             return Err("Select folders or videos together, rather than mixing both.".into());
@@ -405,7 +405,7 @@ pub(crate) async fn move_selected(
             if resolved != *source || !resolved.starts_with(&root) || resolved == root {
                 return Err("A selected item is outside the chosen folder or has changed.".into());
             }
-            if (session.directories && !kind.is_dir()) || (!session.directories && (!kind.is_file() || !video_file(source))) {
+            if (session.directories && !kind.is_dir()) || (!session.directories && (!kind.is_file() || !media_file(source))) {
                 return Err("A selected item's type has changed.".into());
             }
         }

@@ -6,6 +6,9 @@ A local desktop app for browsing folders and inspecting video metadata. Built wi
 
 - Show the installed build's version beside the app name and in the video editor (currently 0.1.22).
 - Choose a folder and browse its subfolders and supported video files.
+- Browse JPG/JPEG, PNG and WebP images alongside videos. Remembered Videos/Images checkboxes filter both folder and workspace views; folders remain available even when both are unchecked.
+- View images in the Inspector with dimensions and available ffprobe metadata. Image previews display the original file, load near visible grid cards, and work without ffprobe. Image generation prompt/seed extraction and full EXIF inspection are later extensions.
+- Tag, rename, duplicate, move and trash images or mixed image/video selections using the existing actions. Enter/double-click displays an image in the Inspector; Space playback and Edit video apply only to videos.
 - Switch between a compact List and a Grid with video thumbnails and filenames. The view choice is saved; grid thumbnails load near the visible area and reuse the preview cache.
 - Choose Small, Medium, or Large previews in Grid view. The size is saved and changes immediately using the cached images.
 - Sort either view by filename or date modified, ascending or descending. Folders stay first; sorting choices are saved.

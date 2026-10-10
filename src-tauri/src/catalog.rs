@@ -55,7 +55,8 @@ pub(crate) fn ensure_observed_on(connection: &Connection, video: &ObservedVideo)
         }
     }
     let parent = Path::new(&video.path).parent().ok_or("Cannot read parent folder")?.to_string_lossy();
-    connection.execute("INSERT INTO videos(path,parent_path,name,size,modified_ns,status,last_seen_at) VALUES (?1,?2,?3,?4,?5,'active',unixepoch()*1000)", params![video.path, parent, video.name, size, video.modified_ns]).map_err(|error| error.to_string())?;
+    let kind = if crate::image_file(Path::new(&video.path)) { "image" } else { "video" };
+    connection.execute("INSERT INTO videos(path,parent_path,name,size,modified_ns,status,last_seen_at,media_kind) VALUES (?1,?2,?3,?4,?5,'active',unixepoch()*1000,?6)", params![video.path, parent, video.name, size, video.modified_ns, kind]).map_err(|error| error.to_string())?;
     Ok(connection.last_insert_rowid())
 }
 

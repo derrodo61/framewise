@@ -39,7 +39,7 @@ fn read_folder(path: &Path, root: &Path, cancelled: &AtomicBool) -> Result<Folde
         if kind.is_symlink() { continue; }
         let child = item.path();
         if kind.is_dir() { folder.children.push(child); }
-        else if kind.is_file() && crate::video_file(&child) {
+        else if kind.is_file() && crate::media_file(&child) {
             folder.present.push(child.to_string_lossy().into_owned());
             // Preserve unreadable-but-present records instead of declaring them missing.
             folder.observed.push(crate::catalog::observe(&child)?);
@@ -146,23 +146,28 @@ pub(crate) fn cancel_workspace_scan(scan_id: u64, scans: tauri::State<'_, ScanSt
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SearchPage { entries: Vec<crate::FileEntry>, total: usize, total_videos: usize, page: usize }
+#[cfg(test)]
 fn search_on(connection: &mut Connection, root: &Path, tags: &[i64], match_all: bool, sort: &str, descending: bool, page: usize) -> Result<SearchPage, String> {
+    search_types_on(connection, root, tags, match_all, sort, descending, page, (true, true))
+}
+#[allow(clippy::too_many_arguments)]
+fn search_types_on(connection: &mut Connection, root: &Path, tags: &[i64], match_all: bool, sort: &str, descending: bool, page: usize, types: (bool, bool)) -> Result<SearchPage, String> {
     let transaction = connection.transaction().map_err(|error| error.to_string())?;
     transaction.execute_batch("CREATE TEMP TABLE IF NOT EXISTS workspace_filter_tags(id INTEGER PRIMARY KEY); DELETE FROM workspace_filter_tags;").map_err(|error| error.to_string())?;
     for tag in tags { transaction.execute("INSERT OR IGNORE INTO workspace_filter_tags VALUES (?1)", [tag]).map_err(|error| error.to_string())?; }
     let count: i64 = transaction.query_row("SELECT COUNT(*) FROM workspace_filter_tags", [], |row| row.get::<_, i64>(0)).map_err(|error| error.to_string())?;
     let (lower, upper) = bounds(root);
-    let predicate = "v.status='active' AND v.path>=?1 AND v.path<?2 AND (?3=0 OR (?4 AND (SELECT COUNT(*) FROM video_tags vt JOIN workspace_filter_tags f ON f.id=vt.tag_id WHERE vt.video_id=v.id)=?3) OR (NOT ?4 AND EXISTS(SELECT 1 FROM video_tags vt JOIN workspace_filter_tags f ON f.id=vt.tag_id WHERE vt.video_id=v.id)))";
-    let total = transaction.query_row(&format!("SELECT COUNT(*) FROM videos v WHERE {predicate}"), params![lower, upper, count, match_all], |row| row.get::<_, i64>(0)).map_err(|error| error.to_string())?;
-    let total_videos = transaction.query_row("SELECT COUNT(*) FROM videos WHERE status='active' AND path>=?1 AND path<?2", params![lower, upper], |row| row.get::<_, i64>(0)).map_err(|error| error.to_string())?;
+    let predicate = "v.status='active' AND v.path>=?1 AND v.path<?2 AND ((v.media_kind='video' AND ?5) OR (v.media_kind='image' AND ?6)) AND (?3=0 OR (?4 AND (SELECT COUNT(*) FROM video_tags vt JOIN workspace_filter_tags f ON f.id=vt.tag_id WHERE vt.video_id=v.id)=?3) OR (NOT ?4 AND EXISTS(SELECT 1 FROM video_tags vt JOIN workspace_filter_tags f ON f.id=vt.tag_id WHERE vt.video_id=v.id)))";
+    let total = transaction.query_row(&format!("SELECT COUNT(*) FROM videos v WHERE {predicate}"), params![lower, upper, count, match_all, types.0, types.1], |row| row.get::<_, i64>(0)).map_err(|error| error.to_string())?;
+    let total_videos = transaction.query_row("SELECT COUNT(*) FROM videos WHERE status='active' AND path>=?1 AND path<?2 AND ((media_kind='video' AND ?3) OR (media_kind='image' AND ?4))", params![lower, upper, types.0, types.1], |row| row.get::<_, i64>(0)).map_err(|error| error.to_string())?;
     let total = usize::try_from(total).map_err(|error| error.to_string())?;
     let total_videos = usize::try_from(total_videos).map_err(|error| error.to_string())?;
     let page = page.min(total.saturating_sub(1) / PAGE_SIZE);
     let direction = if descending { "DESC" } else { "ASC" };
     let order = if sort == "modified" { "CAST(v.modified_ns AS INTEGER)" } else { "v.name COLLATE NOCASE" };
     let entries = {
-        let mut statement = transaction.prepare(&format!("SELECT v.id,v.path,v.name,v.size,v.modified_ns FROM videos v WHERE {predicate} ORDER BY {order} {direction},v.name COLLATE NOCASE {direction},v.path {direction} LIMIT ?5 OFFSET ?6")).map_err(|error| error.to_string())?;
-        statement.query_map(params![lower, upper, count, match_all, PAGE_SIZE as i64, (page * PAGE_SIZE) as i64], |row| {
+        let mut statement = transaction.prepare(&format!("SELECT v.id,v.path,v.name,v.size,v.modified_ns FROM videos v WHERE {predicate} ORDER BY {order} {direction},v.name COLLATE NOCASE {direction},v.path {direction} LIMIT ?7 OFFSET ?8")).map_err(|error| error.to_string())?;
+        statement.query_map(params![lower, upper, count, match_all, types.0, types.1, PAGE_SIZE as i64, (page * PAGE_SIZE) as i64], |row| {
             let modified: String = row.get(4)?;
             Ok(crate::FileEntry { video_id: Some(row.get(0)?), path: row.get(1)?, name: row.get(2)?, size: u64::try_from(row.get::<_, i64>(3)?).ok(), modified_at: modified.parse::<u128>().ok().and_then(|n| u64::try_from(n / 1_000_000).ok()), modified_ns: Some(modified), is_directory: false })
         }).map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?
@@ -171,11 +176,14 @@ fn search_on(connection: &mut Connection, root: &Path, tags: &[i64], match_all: 
     Ok(SearchPage { entries, total, total_videos, page })
 }
 #[tauri::command]
-pub(crate) async fn search_workspace(expected_root: String, tag_ids: Vec<i64>, match_all: bool, sort: String, descending: bool, page: usize, state: tauri::State<'_, crate::AppState>) -> Result<SearchPage, String> {
+pub(crate) async fn search_workspace(query: WorkspaceQuery, state: tauri::State<'_, crate::AppState>) -> Result<SearchPage, String> {
     let root = crate::selected_root(&state)?;
-    if root.to_string_lossy() != expected_root { return Err("Workspace changed; results discarded.".into()); }
-    tauri::async_runtime::spawn_blocking(move || crate::database::with_connection(|connection| search_on(connection, &root, &tag_ids, match_all, &sort, descending, page))).await.map_err(|error| error.to_string())?
+    if root.to_string_lossy() != query.expected_root { return Err("Workspace changed; results discarded.".into()); }
+    tauri::async_runtime::spawn_blocking(move || crate::database::with_connection(|connection| search_types_on(connection, &root, &query.tag_ids, query.match_all, &query.sort, query.descending, query.page, (query.show_videos, query.show_images)))).await.map_err(|error| error.to_string())?
 }
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WorkspaceQuery { expected_root: String, tag_ids: Vec<i64>, match_all: bool, sort: String, descending: bool, page: usize, show_videos: bool, show_images: bool }
 
 #[cfg(test)]
 mod tests {
@@ -285,6 +293,36 @@ mod tests {
         assert!(crate::catalog_operations::reserve_discovery(&root).is_err());
         drop(lease);
         assert!(crate::catalog_operations::ensure_paths_idle(&[root.join("clip.mp4")]).is_ok());
+    }
+    #[test]
+    fn mixed_discovery_and_type_filters_are_applied_before_pagination() {
+        let fixture = Fixture::new();
+        let root = fixture.folder.canonicalize().unwrap();
+        fs::write(root.join("clip.mp4"), b"video").unwrap();
+        fs::write(root.join("photo.JPG"), b"image").unwrap();
+        fs::create_dir(root.join("pictures")).unwrap();
+        fs::write(root.join("pictures/photo.png"), b"image").unwrap();
+        fs::write(root.join("pictures/photo.webp"), b"image").unwrap();
+        fs::write(root.join("ignored.svg"), b"not supported").unwrap();
+        let mut connection = open_at(&fixture.path).unwrap();
+        scan_on(&mut connection, &root, &job(&root)).unwrap();
+        let images = search_types_on(&mut connection, &root, &[], true, "name", false, 0, (false, true)).unwrap();
+        assert_eq!((images.total, images.total_videos), (3, 3));
+        assert!(images.entries.iter().all(|entry| crate::image_file(Path::new(&entry.path))));
+        assert_eq!(search_types_on(&mut connection, &root, &[], true, "name", false, 0, (true, false)).unwrap().total, 1);
+        assert_eq!(search_types_on(&mut connection, &root, &[], true, "name", false, 0, (false, false)).unwrap().total, 0);
+        assert_eq!(search_on(&mut connection, &root, &[], true, "name", false, 0).unwrap().total, 4);
+        connection.execute("INSERT INTO tags(name,normalized_name) VALUES ('Keep','keep')", []).unwrap();
+        let image_id = images.entries[0].video_id.unwrap();
+        connection.execute("INSERT INTO video_tags VALUES (?1,1)", [image_id]).unwrap();
+        assert_eq!(search_types_on(&mut connection, &root, &[1], true, "name", false, 0, (false, true)).unwrap().total, 1);
+        assert_eq!(search_types_on(&mut connection, &root, &[1], true, "name", false, 0, (true, false)).unwrap().total, 0);
+        for index in 0..205 {
+            connection.execute("INSERT INTO videos(path,parent_path,name,size,modified_ns,status,last_seen_at,media_kind) VALUES (?1,?2,?3,1,'0','active',1,'image')", params![root.join(format!("{index:03}.jpg")).to_string_lossy(), root.to_string_lossy(), format!("{index:03}.jpg")]).unwrap();
+        }
+        let page = search_types_on(&mut connection, &root, &[], true, "name", false, 1, (false, true)).unwrap();
+        assert_eq!(page.total, 208);
+        assert_eq!(page.entries.len(), 8);
     }
     #[test]
     fn interrupted_scan_does_not_retire_an_unvisited_subtree() {

@@ -62,7 +62,7 @@ fn collect(path: &Path, root: usize, base: &Path, videos: &mut Vec<(usize, PathB
         for entry in fs::read_dir(path).map_err(|error| error.to_string())? {
             collect(&entry.map_err(|error| error.to_string())?.path(), root, base, videos)?;
         }
-    } else if metadata.is_file() && crate::video_file(path) {
+    } else if metadata.is_file() && crate::media_file(path) {
         videos.push((root, path.strip_prefix(base).map_err(|error| error.to_string())?.to_path_buf(), observe(path)?));
     }
     Ok(())
@@ -168,7 +168,8 @@ fn apply_on(connection: &mut Connection, completion: &Completion) -> Result<(), 
             let parent = Path::new(&after.path).parent().ok_or("Cannot read target parent")?.to_string_lossy();
             let size = i64::try_from(after.size).map_err(|error| error.to_string())?;
             if completion.action == Action::Copy {
-                transaction.execute("INSERT INTO videos(path,parent_path,name,size,modified_ns,status,last_seen_at) VALUES (?1,?2,?3,?4,?5,'active',unixepoch()*1000)", params![after.path, parent, after.name, size, after.modified_ns]).map_err(|error| error.to_string())?;
+                let kind = if crate::image_file(Path::new(&after.path)) { "image" } else { "video" };
+                transaction.execute("INSERT INTO videos(path,parent_path,name,size,modified_ns,status,last_seen_at,media_kind) VALUES (?1,?2,?3,?4,?5,'active',unixepoch()*1000,?6)", params![after.path, parent, after.name, size, after.modified_ns, kind]).map_err(|error| error.to_string())?;
                 let new_id = transaction.last_insert_rowid();
                 transaction.execute("INSERT INTO video_tags(video_id,tag_id) SELECT ?1,tag_id FROM video_tags WHERE video_id=?2", params![new_id, item.id]).map_err(|error| error.to_string())?;
             } else {

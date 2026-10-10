@@ -27,6 +27,34 @@ fn active_id(connection: &Connection, path: &Path) -> i64 {
 fn tags(connection: &Connection, id: i64) -> i64 {
     connection.query_row("SELECT COUNT(*) FROM video_tags WHERE video_id=?1", [id], |row| row.get(0)).unwrap()
 }
+#[test]
+fn image_copy_move_and_trash_restore_keep_kind_and_assignments() {
+    let fixture = Fixture::new();
+    let mut connection = open_at(&fixture.path).unwrap();
+    let source = fixture.folder.join("photo.jpg");
+    let id = seed(&mut connection, &source);
+    let copied = fixture.folder.join("photo (1).jpg");
+    let copy = start(&mut connection, &fixture, Action::Copy, vec![source.clone()], vec![Some(copied.clone())]);
+    fs::copy(&source, &copied).unwrap();
+    finish(&mut connection, &copy);
+    let copied_id = active_id(&connection, &copied);
+    assert_ne!(copied_id, id);
+    assert_eq!(tags(&connection, copied_id), 1);
+    assert_eq!(connection.query_row("SELECT media_kind FROM videos WHERE id=?1", [copied_id], |row| row.get::<_, String>(0)).unwrap(), "image");
+    let moved = fixture.folder.join("renamed.jpg");
+    let movement = start(&mut connection, &fixture, Action::Move, vec![source.clone()], vec![Some(moved.clone())]);
+    fs::rename(&source, &moved).unwrap();
+    finish(&mut connection, &movement);
+    assert_eq!(active_id(&connection, &moved), id);
+    assert_eq!(tags(&connection, id), 1);
+    let trash = start(&mut connection, &fixture, Action::Trash, vec![moved.clone()], vec![None]);
+    let backup = fixture.folder.join("test-trash.jpg");
+    fs::rename(&moved, &backup).unwrap();
+    finish(&mut connection, &trash);
+    assert_eq!(tags(&connection, id), 1);
+    fs::rename(&backup, &moved).unwrap();
+    assert_eq!(ensure_observed_on(&connection, &observe(&moved).unwrap()).unwrap(), id);
+}
 fn status(connection: &Connection, id: i64) -> String {
     connection.query_row("SELECT status FROM videos WHERE id=?1", [id], |row| row.get(0)).unwrap()
 }
