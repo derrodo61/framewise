@@ -155,17 +155,7 @@ fn search_on(connection: &mut Connection, root: &Path, tags: &[i64], match_all: 
 fn search_types_on(connection: &mut Connection, root: &Path, tags: &[i64], match_all: bool, sort: &str, descending: bool, page: usize, types: (bool, bool)) -> Result<SearchPage, String> {
     search_dates_on(connection, root, tags, match_all, sort, descending, page, types, &DateRange::default())
 }
-#[derive(serde::Deserialize)]
-pub(crate) struct DateRange { field: String, from: Option<i64>, to: Option<i64> }
-impl DateRange {
-    pub(crate) fn matches(&self, modified: Option<i64>, created: Option<i64>) -> Result<bool, String> {
-        if self.from.zip(self.to).is_some_and(|(from, to)| from >= to) { return Err("Invalid date range; no files were deleted.".into()); }
-        let value = match self.field.as_str() { "created" => created, "modified" => modified, _ => return Err("Unsupported date field; no files were deleted.".into()) };
-        if self.from.is_none() && self.to.is_none() { return Ok(true); }
-        Ok(value.is_some_and(|value| self.from.is_none_or(|from| value >= from) && self.to.is_none_or(|to| value < to)))
-    }
-}
-impl Default for DateRange { fn default() -> Self { Self { field: "modified".into(), from: None, to: None } } }
+pub(crate) use crate::media_filters::DateRange;
 #[allow(clippy::too_many_arguments)]
 fn search_dates_on(connection: &mut Connection, root: &Path, tags: &[i64], match_all: bool, sort: &str, descending: bool, page: usize, types: (bool, bool), dates: &DateRange) -> Result<SearchPage, String> {
     if dates.from.zip(dates.to).is_some_and(|(from, to)| from >= to) { return Err("From must be on or before To.".into()); }

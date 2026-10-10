@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import type { DateBounds } from './mediaDates'
+import type { FileEntry, DirectoryListing } from './mediaModel'
 const noDates: DateBounds = { field: 'modified', from: null, to: null, error: null }
 
-type Entry = { name: string; path: string; isDirectory: boolean; size: number | null; modifiedAt: number | null; createdAt: number | null; videoId: number | null }
-type Page = { entries: Entry[]; total: number; totalVideos: number; page: number }
+type Page = { entries: FileEntry[]; total: number; totalVideos: number; page: number }
 type Scan = { id: number; root: string; status: string; folders: number; videos: number; warnings: number; message: string | null; currentFolder: string }
-const empty: Entry[] = []
+const empty: FileEntry[] = []
 
-export function useWorkspaceSearch(root: string | null, enabled: boolean, tagIds: number[], matchAll: boolean, sort: string, descending: boolean, revision: number, listing: object | null, showVideos = true, showImages = true, dates = noDates) {
+type SearchOptions = { root: string | null; enabled: boolean; tagIds: number[]; matchAll: boolean; sort: string; descending: boolean; revision: number; listing: DirectoryListing | null; showVideos?: boolean; showImages?: boolean; dates?: DateBounds }
+export function useWorkspaceSearch({ root, enabled, tagIds, matchAll, sort, descending, revision, listing, showVideos = true, showImages = true, dates = noDates }: SearchOptions) {
   const [scan, setScan] = useState<Scan | null>(null)
   const [restart, setRestart] = useState(0)
   const [scanError, setScanError] = useState<{ root: string; message: string } | null>(null)

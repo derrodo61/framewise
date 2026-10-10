@@ -12,6 +12,8 @@ mod catalog;
 mod catalog_operations;
 mod tags;
 mod workspace_search;
+mod media_filters;
+mod trash_media;
 #[cfg(desktop)]
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
@@ -185,63 +187,23 @@ async fn reveal_in_file_manager(path: String, state: tauri::State<'_, AppState>)
 }
 
 #[tauri::command]
-async fn move_videos_to_trash(paths: Vec<String>, filter: Option<TrashFilter>, state: tauri::State<'_, AppState>) -> Result<TrashBatchResult, String> {
-    if paths.is_empty() {
-        return Err("Select at least one video".into());
-    }
+async fn move_videos_to_trash(paths: Vec<String>, filter: Option<trash_media::TrashFilter>, state: tauri::State<'_, AppState>) -> Result<TrashBatchResult, String> {
     let root = selected_root(&state)?;
-    if filter.as_ref().is_some_and(|filter| filter.expected_root != root.to_string_lossy()) { return Err("Workspace changed; no files were deleted.".into()); }
-    let mut files = Vec::new();
-    let mut seen = HashSet::new();
-    let mut parent: Option<PathBuf> = None;
-    for path in paths {
-        let file_type = fs::symlink_metadata(&path)
-            .map_err(|error| format!("Cannot open video: {error}"))?
-            .file_type();
-        if !file_type.is_file() {
-            return Err("Select regular media files".into());
-        }
-        let resolved = within_root(&path, &state)?;
-        if !media_file(&resolved) {
-            return Err("Select supported media files".into());
-        }
-        if let Some(filter) = &filter {
-            let metadata = fs::metadata(&resolved).map_err(|error| error.to_string())?;
-            let modified = metadata.modified().ok().and_then(|time| time.duration_since(UNIX_EPOCH).ok()).and_then(|time| i64::try_from(time.as_millis()).ok());
-            let created = metadata.created().ok().and_then(|time| time.duration_since(UNIX_EPOCH).ok()).and_then(|time| i64::try_from(time.as_millis()).ok());
-            let enabled = if image_file(&resolved) { filter.show_images } else { filter.show_videos };
-            if !enabled || !filter.date.matches(modified, created)? { return Err("A selected file does not match the active date/type filters. No files were deleted. Refresh and select again.".into()); }
-        }
-        let folder = resolved.parent().ok_or("Cannot find the video's folder")?;
-        if parent.is_none() { parent = Some(folder.to_path_buf()); }
-        if seen.insert(resolved.clone()) {
-            files.push(resolved);
-        }
-    }
-    let parent = parent.ok_or("Cannot find the videos' folder")?;
     tauri::async_runtime::spawn_blocking(move || {
+        let batch = trash_media::validate(&root, paths, filter.as_ref())?;
+        let parent = batch.parent()?;
+        let files = batch.files().to_vec();
         let operation = catalog_operations::Operation::begin(catalog_operations::Action::Trash, files.clone(), vec![None; files.len()])?;
-        let preview_names: Vec<_> = files.iter().map(|file| thumbnail_name(file)).collect();
-        let mut error = trash::delete_all(&files).err().map(|cause| {
-            log::error!("Could not move every video to Trash: {cause}");
-            format!("Could not move every video to Trash: {cause}")
-        });
-        let mut moved_count = 0;
-        for (file, preview_name) in files.iter().zip(preview_names) {
-            if matches!(fs::symlink_metadata(file), Err(cause) if cause.kind() == io::ErrorKind::NotFound) {
-                moved_count += 1;
-                forget_video_preview(file, preview_name.as_deref());
-            }
-        }
+        let previews: Vec<_> = files.iter().map(|file| (file.clone(), thumbnail_name(file))).collect();
+        let outcome = batch.execute(|files| trash::delete_all(files).map_err(|cause| format!("Could not move every file to Trash: {cause}")));
+        let mut error = outcome.error;
+        if let Some(error) = &error { log::error!("{error}"); }
+        let moved: HashSet<_> = outcome.moved.iter().collect();
+        for (file, name) in previews { if moved.contains(&file) { forget_video_preview(&file, name.as_deref()); } }
         if let Err(cause) = operation.finish() { error = Some(match error { Some(original) => format!("{original} {cause}"), None => cause }); }
-        let remaining_paths = files.iter().filter(|file| !matches!(fs::symlink_metadata(file), Err(cause) if cause.kind() == io::ErrorKind::NotFound)).map(|file| file.to_string_lossy().into_owned()).collect();
-        let listing = catalogued_folder(&parent, &root)?;
-        Ok(TrashBatchResult { listing, moved_count, error, remaining_paths })
+        Ok(TrashBatchResult { listing: catalogued_folder(&parent, &root)?, moved_count: moved.len(), error, remaining_paths: outcome.remaining_paths })
     }).await.map_err(|error| format!("Trash operation failed: {error}"))?
 }
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TrashFilter { expected_root: String, date: workspace_search::DateRange, show_videos: bool, show_images: bool }
 
 #[tauri::command]
 async fn move_folder_to_trash(path: String, state: tauri::State<'_, AppState>) -> Result<DirectoryListing, String> {

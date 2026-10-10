@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
+import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent } from 'react'
 import { convertFileSrc, invoke, isTauri } from '@tauri-apps/api/core'
@@ -11,21 +11,20 @@ import GenerationPrompt from './GenerationPrompt'
 import TagSettings from './TagSettings'
 import AppVersion from './AppVersion'
 import TagFilter from './TagFilter'
-import { useTagFilter } from './useTagFilter'
-import { filterMedia, visibleSelection, parentPath, sameParent, shownFilePaths } from './mediaFilter'
-import { useWorkspaceSearch } from './useWorkspaceSearch'
+import { useMediaBrowser, useMediaSelection } from './useMediaBrowser'
+import { folderResults } from './mediaResults'
+import { prepareTrash, executeTrash, trashMessage, folderTrashResult, folderTrashBatch } from './trashWorkflow'
+import type { FileEntry, DirectoryListing, TrashBatchResult } from './mediaModel'
+import { parentPath, sameParent } from './mediaFilter'
 import { VideoTags, TagBatchDialog } from './VideoTags'
 import type { NamedTagVideo } from './VideoTags'
 import MediaThumbnail from './MediaThumbnail'
 import ImagePreview from './ImagePreview'
-import { isImage, filterMediaTypes } from './mediaTypes'
+import { isImage } from './mediaTypes'
 import DateFilter from './DateFilter'
-import { dateBounds, emptyDateFilter, filterMediaDates, restoreDateFilter } from './mediaDates'
 import type { DateFilterState } from './mediaDates'
-import { useLocalDay } from './useLocalDay'
 import { generateThumbnail } from './thumbnailQueue'
 import { nextMediaIndex } from './mediaNavigation'
-import { sortMedia } from './mediaSort'
 import type { MediaSort, SortDirection } from './mediaSort'
 import type { EditResult } from './Editor'
 import { displayPath, versionedMediaSrc } from './paths'
@@ -39,9 +38,6 @@ import './preview.css'
 import './file-actions.css'
 import './media-view.css'
 
-type FileEntry = { name: string; path: string; isDirectory: boolean; size: number | null; modifiedAt: number | null; createdAt?: number | null; videoId?: number | null }
-type DirectoryListing = { path: string; parent: string | null; entries: FileEntry[]; catalogWarning?: string }
-type TrashBatchResult = { listing: DirectoryListing; movedCount: number; error: string | null; remainingPaths?: string[] }
 type DuplicateResult = { listing: DirectoryListing; duplicatedPath: string }
 type RenameResult = { listing: DirectoryListing; renamedPath: string }
 type CreatedFolder = { listing: DirectoryListing; createdPath: string }
@@ -230,19 +226,8 @@ function App() {
   const [sortDirection, setSortDirection] = useState<SortDirection>(() => getPreference('framewise.sortDirection') === 'desc' ? 'desc' : 'asc')
   const [root, setRoot] = useState<string | null>(null)
   const [listing, setListing] = useState<DirectoryListing | null>(null)
-  const [showVideos, setShowVideos] = useState(() => getPreference('framewise.showVideos') !== 'false')
-  const [showImages, setShowImages] = useState(() => getPreference('framewise.showImages') !== 'false')
-  const [dateScope, setDateScope] = useState(() => restoreDateFilter(getPreference('framewise.dateFilter')))
-  if (root !== null && dateScope.root !== root) setDateScope({ root, value: emptyDateFilter })
-  useEffect(() => {
-    if (root !== null && dateScope.root === root) setPreference('framewise.dateFilter', JSON.stringify(dateScope))
-  }, [root, dateScope])
-  const localDay = useLocalDay()
-  const dates = useMemo(() => dateBounds(dateScope.value, localDay), [dateScope.value, localDay])
-  const sortedMediaEntries = useMemo(() => filterMediaDates(filterMediaTypes(sortMedia(listing?.entries ?? [], mediaSort, sortDirection), showVideos, showImages), dates), [listing, mediaSort, sortDirection, showVideos, showImages, dates])
   const [selected, setSelected] = useState<FileEntry | null>(null)
   const [playbackRequest, setPlaybackRequest] = useState<{ path: string; action: 'play' | 'toggle' } | null>(null)
-  const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [probe, setProbe] = useState<Probe | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -265,14 +250,10 @@ function App() {
   const [folderBusy, setFolderBusy] = useState(false)
   const [view, setView] = useState<'media' | 'settings'>('media')
   const [settingsTab, setSettingsTab] = useState<'settings' | 'tags'>('settings')
-  const [searchScope, setSearchScope] = useState<{ root: string | null; workspace: boolean }>({ root: null, workspace: false })
-  if (searchScope.root !== root) setSearchScope({ root, workspace: false })
-  const workspace = searchScope.root === root && searchScope.workspace
-  const tagFilter = useTagFilter(listing, root, tagRevision, view, !workspace)
-  const workspaceSearch = useWorkspaceSearch(root, workspace && view === 'media', tagFilter.ids, tagFilter.matchAll, mediaSort, sortDirection === 'desc', tagRevision, listing, showVideos, showImages, dates)
-  const resultsReady = workspace ? workspaceSearch.ready : tagFilter.ready
-  const scanRunning = workspace && workspaceSearch.scan?.status === 'running'
-  const mediaEntries = useMemo(() => workspace ? workspaceSearch.entries : filterMedia(sortedMediaEntries, tagFilter.active, tagFilter.matches), [workspace, workspaceSearch.entries, sortedMediaEntries, tagFilter.active, tagFilter.matches])
+  const browser = useMediaBrowser({ root, listing, revision: tagRevision, view, sort: mediaSort, direction: sortDirection })
+  const { showVideos, showImages, dateScope, dates, workspace, tagFilter, workspaceSearch, sortedMediaEntries, mediaEntries, resultsReady, scanRunning } = browser
+  const selection = useMediaSelection(mediaEntries, resultsReady)
+  const { selectedPaths, setSelectedPaths, selectionAnchor } = selection
   const [theme, setTheme] = useState<'light' | 'dark'>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
   const [defaultFolder, setDefaultFolder] = useState<string | null>(() => getPreference('framewise.defaultFolder'))
   const [settingsError, setSettingsError] = useState<string | null>(null)
@@ -293,7 +274,6 @@ function App() {
   const fileListRef = useRef<HTMLDivElement | null>(null)
   const contextMenuRef = useRef<HTMLDivElement | null>(null)
   const pendingFocus = useRef<{ path?: string } | null>(null)
-  const selectionAnchor = useRef<string | null>(null)
   const listingRef = useRef<DirectoryListing | null>(null)
 
   function selectRoot(path: string) {
@@ -341,7 +321,7 @@ function App() {
       })
       .finally(() => { if (active && currentRequest === requestId.current) setStartupLoading(false) })
     return () => { active = false }
-  }, [])
+  }, [setSelectedPaths, selectionAnchor])
 
   const focusPendingFiles = useEffectEvent(() => {
     if (view !== 'media' || !listing || !pendingFocus.current || !resultsReady) return
@@ -357,12 +337,10 @@ function App() {
 
   const reconcileFilteredSelection = useEffectEvent(() => {
     if (!resultsReady) return
-    const kept = visibleSelection(selectedPaths, mediaEntries)
-    if (kept.length !== selectedPaths.length) setSelectedPaths(kept)
+    selection.reconcile()
     if (selected && !mediaEntries.some(entry => entry.path === selected.path)) {
       requestId.current++; setSelected(null); setProbe(null); setError(null); setLoading(false); setPlaybackRequest(null); setContextMenu(null)
     }
-    if (selectionAnchor.current && !mediaEntries.some(entry => entry.path === selectionAnchor.current)) selectionAnchor.current = null
   })
   useEffect(() => {
     // Reconcile selection before restoring focus to the newly rendered rows.
@@ -523,18 +501,17 @@ function App() {
   }
   function changeSearchScope(workspace: boolean) {
     requestId.current++; setSelected(null); setSelectedPaths([]); setProbe(null); setError(null); setLoading(false); setPlaybackRequest(null); setContextMenu(null); selectionAnchor.current = null; pendingFocus.current = null
-    setSearchScope({ root, workspace })
+    browser.setWorkspace(workspace)
   }
   function changeMediaTypes(videos: boolean, images: boolean) {
     changeTagFilters(tagFilter.ids, tagFilter.matchAll)
     pendingFocus.current = null
-    setShowVideos(videos); setShowImages(images)
-    setPreference('framewise.showVideos', String(videos)); setPreference('framewise.showImages', String(images))
+    browser.setTypes(videos, images)
   }
   function changeDates(value: DateFilterState) {
     changeTagFilters(tagFilter.ids, tagFilter.matchAll)
     pendingFocus.current = null
-    setDateScope({ root, value })
+    browser.setDates(value)
   }
   function changeSearchPage(page: number) {
     changeTagFilters(tagFilter.ids, tagFilter.matchAll)
@@ -558,7 +535,7 @@ function App() {
 
   function inspectFocusedVideo(directory: DirectoryListing, focusTarget: { path?: string }) {
     if (tagFilter.active) return
-    const entries = filterMediaDates(filterMediaTypes(sortMedia(directory.entries, mediaSort, sortDirection), showVideos, showImages), dates)
+    const entries = folderResults(directory.entries, { ...browser.resultFilters, tagActive: false })
     const entry = focusTarget.path
       ? entries.find(item => item.path === focusTarget.path)
       : entries[0]
@@ -664,12 +641,9 @@ function App() {
   }
   function selectAllShownFiles() {
     if (!resultsReady || deleting || renaming || duplicatingFile || renameTarget || trashRequestPending.current) return
-    const paths = shownFilePaths(mediaEntries)
-    if (!paths.length) return
+    const entry = selection.selectAll(selected)
+    if (!entry) return
     setContextMenu(null)
-    setSelectedPaths(paths)
-    selectionAnchor.current = paths[0]
-    const entry = selected && paths.includes(selected.path) ? selected : mediaEntries.find(item => item.path === paths[0])!
     if (selected?.path !== entry.path) inspectSelection(entry, true)
     window.requestAnimationFrame(() => Array.from(fileListRef.current?.querySelectorAll<HTMLButtonElement>('[data-list-row]') ?? []).find(row => row.dataset.path === entry.path)?.focus())
   }
@@ -679,25 +653,9 @@ function App() {
   }
 
   function selectMediaEntry(entry: FileEntry, index: number, modifiers: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) {
-    const additive = modifiers.ctrlKey || modifiers.metaKey
-    if (entry.isDirectory && !additive && !modifiers.shiftKey) { void browse(entry.path); return }
-    const compatiblePaths = selectedPaths.filter(path => mediaEntries.some(item => item.path === path && item.isDirectory === entry.isDirectory))
-    if (modifiers.shiftKey && listing) {
-      const anchor = mediaEntries.findIndex(item => item.path === selectionAnchor.current && item.isDirectory === entry.isDirectory)
-      const from = anchor < 0 ? index : anchor
-      const range = mediaEntries.slice(Math.min(from, index), Math.max(from, index) + 1).filter(item => item.isDirectory === entry.isDirectory).map(item => item.path)
-      if (anchor < 0) selectionAnchor.current = entry.path
-      setSelectedPaths(additive ? [...new Set([...compatiblePaths, ...range])] : range)
-      inspectSelection(entry, true)
-    } else if (additive) {
-      selectionAnchor.current = entry.path
-      const next = compatiblePaths.includes(entry.path) ? compatiblePaths.filter(path => path !== entry.path) : [...compatiblePaths, entry.path]
-      setSelectedPaths(next)
-      inspectSelection(next.includes(entry.path) ? entry : mediaEntries.find(item => item.path === next.at(-1)), true)
-    } else {
-      selectionAnchor.current = entry.path
-      void selectFile(entry)
-    }
+    const update = selection.selectEntry(entry, index, modifiers)
+    if (update.openFolder) { void browse(update.openFolder); return }
+    inspectSelection(update.inspect, true)
   }
 
   function playMediaEntry(entry: FileEntry, action: 'play' | 'toggle' = 'play') {
@@ -808,58 +766,41 @@ function App() {
     if (trashRequestPending.current || deleting || duplicatingFile || renaming || renameTarget || folderBusy) return
     trashRequestPending.current = true
     setContextMenu(null)
-    const paths = file.isDirectory ? [] : selectedPaths.includes(file.path) ? selectedPaths : [file.path]
-    const count = paths.length
-    const visibleFiles = mediaEntries.filter(entry => !entry.isDirectory && paths.includes(entry.path))
-    if (!file.isDirectory && (!resultsReady || dates.error || visibleFiles.length !== count)) {
-      trashRequestPending.current = false
-      setFileAction({ message: 'The selection no longer matches the displayed results. Refresh and select the files again. No files were deleted.', error: true })
-      return
-    }
-    const selectedDates = visibleFiles.map(entry => dates.field === 'created' ? entry.createdAt : entry.modifiedAt).filter((value): value is number => value != null)
-    const dateSpan = selectedDates.length ? `${new Date(selectedDates.reduce((a, b) => Math.min(a, b))).toLocaleDateString()} – ${new Date(selectedDates.reduce((a, b) => Math.max(a, b))).toLocaleDateString()}` : 'Unavailable'
-    const dateSummary = `\n\nDate filter: ${dateScope.value.field === 'created' ? 'Created' : 'Modified'} · ${dateScope.value.preset === 'all' ? 'All dates' : dateScope.value.preset === 'custom' ? `${dateScope.value.from || 'Any'} to ${dateScope.value.to || 'Any'}` : dateScope.value.preset === '7' ? 'Last 7 days' : dateScope.value.preset === '30' ? 'Last 30 days' : dateScope.value.preset}.\nSelected file dates: ${dateSpan}${selectedDates.length < count ? ` (${count - selectedDates.length} unavailable)` : ''}.`
+    let paths: string[] = []
     try {
-      const approved = await ask(file.isDirectory
-        ? `Move folder “${file.name}” and everything inside it to Trash? You can restore it from your system's Trash or Recycle Bin.`
-        : count === 1
-          ? `Move “${file.name}” to Trash? You can restore it from your system's Trash or Recycle Bin.`
-          : `Move ${count} selected files to Trash? You can restore them from your system's Trash or Recycle Bin.${dateSummary}`,
-      { title: file.isDirectory ? 'Move folder to Trash' : count === 1 ? 'Move file to Trash' : `Move ${count} files to Trash`, kind: 'warning', okLabel: 'Move to Trash', cancelLabel: 'Cancel' })
-      if (!approved) return
-      setDeleting(true)
-      setFileAction(null)
-      const currentRequest = ++requestId.current
-      flushSync(() => { setSelected(null); setProbe(null); setError(null); setLoading(false) })
-      const result: TrashBatchResult = file.isDirectory
-        ? { listing: await invoke<DirectoryListing>('move_folder_to_trash', { path: file.path }), movedCount: 1, error: null }
-        : await invoke<TrashBatchResult>('move_videos_to_trash', { paths, filter: { expectedRoot: root, date: { field: dates.field, from: dates.from, to: dates.to }, showVideos, showImages } })
+      const request = prepareTrash({ file, selectedPaths, entries: mediaEntries, ready: resultsReady, root, dates, dateState: dateScope.value, showVideos, showImages })
+      paths = request.kind === 'files' ? request.paths : []
+      let currentRequest = 0
+      const outcome = await executeTrash(request, {
+        confirm: request => ask(request.message, { title: request.title, kind: 'warning', okLabel: 'Move to Trash', cancelLabel: 'Cancel' }),
+        beforeMove: () => {
+          setDeleting(true); setFileAction(null)
+          currentRequest = ++requestId.current
+          flushSync(() => { setSelected(null); setProbe(null); setError(null); setLoading(false) })
+        },
+        move: request => request.kind === 'folder'
+          ? invoke<DirectoryListing>('move_folder_to_trash', { path: request.paths[0] }).then(folderTrashBatch)
+          : invoke<TrashBatchResult>('move_videos_to_trash', { paths: request.paths, filter: request.filter }),
+      })
+      if (outcome.status === 'cancelled') return
+      const result = outcome.result
       if (currentRequest !== requestId.current) return
       if (workspace && !file.isDirectory) {
         const remaining = (result.remainingPaths ?? []).filter(path => mediaEntries.some(entry => entry.path === path))
         pendingFocus.current = null
         setSelectedPaths(remaining); selectionAnchor.current = null
         setTagRevision(value => value + 1)
-        setFileAction({ message: result.error ? `Moved ${result.movedCount} of ${count} files to Trash. ${result.error}` : `Moved ${result.movedCount} ${result.movedCount === 1 ? 'file' : 'files'} to Trash.`, error: !!result.error })
+        setFileAction({ message: trashMessage(request, result), error: !!result.error })
         return
       }
       const next = result.listing
-      const oldIndex = mediaEntries.findIndex(entry => entry.path === file.path)
-      const nextEntries = workspace
-        ? mediaEntries.filter(entry => parentPath(entry.path) !== next.path || next.entries.some(remaining => remaining.path === entry.path))
-        : filterMedia(filterMediaDates(filterMediaTypes(sortMedia(next.entries, mediaSort, sortDirection), showVideos, showImages), dates), tagFilter.active, tagFilter.matches)
-      const remaining = result.error ? nextEntries.filter(entry => paths.includes(entry.path)) : []
-      const nearby = remaining[0] ?? nextEntries[Math.min(Math.max(oldIndex, 0), nextEntries.length - 1)]
+      const nextEntries = folderResults(next.entries, browser.resultFilters)
+      const { remaining, nearby } = folderTrashResult(nextEntries, paths, file.path, mediaEntries, result.error)
       pendingFocus.current = nearby ? { path: nearby.path } : null
       setListing(next)
       setSelectedPaths(remaining.map(entry => entry.path))
       selectionAnchor.current = null
-      const message = result.error
-        ? `Moved ${result.movedCount} of ${count} ${count === 1 ? 'file' : 'files'} to Trash. ${result.error}`
-        : file.isDirectory ? `Moved “${file.name}” to Trash.`
-          : count === 1 ? `Moved “${file.name}” to Trash.`
-            : `Moved ${count} files to Trash.`
-      setFileAction({ message, error: !!result.error })
+      setFileAction({ message: trashMessage(request, result), error: !!result.error })
       if (nearby && !nearby.isDirectory) void selectFile(nearby, 0, remaining.length > 0)
     } catch (cause) {
       setFileAction({ message: reportError(file.isDirectory ? 'Moving folder to Trash' : 'Moving file to Trash', cause), error: true })

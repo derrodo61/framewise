@@ -5,8 +5,8 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { displayPath } from './paths'
 import './move-window.css'
 
-type FileEntry = { name: string; path: string; isDirectory: boolean }
-type DirectoryListing = { path: string; parent: string | null; entries: FileEntry[] }
+import type { DirectoryListing } from './mediaModel'
+
 type MoveSession = { sourceFolder: string; names: string[]; directories: boolean }
 type MoveResult = { count: number; destination: string }
 
