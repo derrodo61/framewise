@@ -1137,7 +1137,9 @@ name = "framewise"
 version = "0.1.22"
 dependencies = [
  "caseless",
+ "crc32fast",
  "dirs",
+ "flate2",
  "log",
  "rusqlite",
  "serde",

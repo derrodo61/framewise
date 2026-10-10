@@ -278,3 +278,20 @@ assert.equal(cutPreviewAction(0, 0, 0.5, 5, true), 'skip')
 assert.equal(cutPreviewAction(4.2, 4, 5, 5, true), 'stop')
 
 console.log('Frame navigation, cut preview, media sorting, grid navigation, and generation metadata tests passed')
+
+// ComfyUI PNG: SaveImage -> decode -> sampler -> CFGGuider -> ReferenceLatent -> text.
+const imageGraph = JSON.parse(await readFile(new URL('fixtures/comfy-image-generation.json', import.meta.url), 'utf8'))
+const imageMetadata = extractGenerationMetadata(comfyProbe(imageGraph))
+assert.equal(imageMetadata.format, 'ComfyUI')
+assert.deepEqual(imageMetadata.prompts.map(prompt => [prompt.kind, prompt.text]), [['positive', 'instapic\nthe woman from the reference image sits in front of a white wall']])
+assert.deepEqual(imageMetadata.seeds.map(seed => seed.value), ['793244420502762'])
+assert.deepEqual(imageMetadata.warnings, [])
+// Disconnected text and seed nodes cannot contaminate the saved image's metadata.
+const disconnectedImageGraph = structuredClone(imageGraph)
+disconnectedImageGraph.unused = { class_type: 'CLIPTextEncode', inputs: { text: 'Unused prompt' } }
+disconnectedImageGraph.unusedNoise = { class_type: 'RandomNoise', inputs: { noise_seed: 42 } }
+assert.deepEqual(extractGenerationMetadata(comfyProbe(disconnectedImageGraph)), imageMetadata)
+const plainImageGraph = structuredClone(imageGraph)
+plainImageGraph['63'].inputs.positive = ['74', 0]
+plainImageGraph['63'].inputs.negative = ['67', 0]
+assert.deepEqual(extractGenerationMetadata(comfyProbe(plainImageGraph)).prompts, imageMetadata.prompts)

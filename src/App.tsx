@@ -135,6 +135,16 @@ function Property({ label, value }: { label: string; value: unknown }) {
   return <div className="property"><dt>{label}</dt><dd>{display(value)}</dd></div>
 }
 
+function EmbeddedTags({ tags }: { tags: Record<string, string> }) {
+  const entries = Object.entries(tags)
+  if (!entries.length) return <p className="no-data">No embedded tags found.</p>
+  const compact = entries.filter(([, value]) => value.length <= 500)
+  return <>
+    {compact.length > 0 && <dl className="property-list">{compact.map(([key, value]) => <Property key={key} label={key} value={value} />)}</dl>}
+    {entries.filter(([, value]) => value.length > 500).map(([key, value]) => <details key={key} className="raw-details"><summary>{key}</summary><pre>{value}</pre></details>)}
+  </>
+}
+
 function VideoPreview({ file, playbackAction, onPlayRequestHandled }: { file: FileEntry; playbackAction: 'play' | 'toggle' | null; onPlayRequestHandled: () => void }) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const lookupStartedAt = useRef(0)
@@ -1068,7 +1078,7 @@ function App() {
           {loading && <div className="notice">Reading media metadata…</div>}
           {error && <div className="notice error" role="alert"><Icon name="info" size={18} /><span>{error}</span><button onClick={() => setError(null)} aria-label="Dismiss error"><Icon name="close" size={15} /></button></div>}
           {probe && <>
-            {!selectedImage && <GenerationPrompt probe={probe} />}
+            <GenerationPrompt probe={probe} image={selectedImage} />
             <div className="section-title">OVERVIEW</div>
             <dl className="property-list">{!selectedImage && <Property label="Duration" value={duration(probe.format?.duration)} />}<Property label="File size" value={fileSize(probe.format?.size ?? selected.size)} /><Property label={selectedImage ? 'Format' : 'Container'} value={probe.format?.format_long_name ?? probe.format?.format_name} />{!selectedImage && <Property label="Bitrate" value={bitrate(probe.format?.bit_rate)} />}</dl>
             <div className="section-title">{selectedImage ? 'IMAGE DETAILS' : 'VIDEO STREAM'}</div>
@@ -1078,7 +1088,7 @@ function App() {
             {audio ? <dl className="property-list"><Property label="Codec" value={audio.codec_name?.toUpperCase()} /><Property label="Channels" value={audio.channel_layout ?? audio.channels} /><Property label="Sample rate" value={audio.sample_rate ? `${Number(audio.sample_rate).toLocaleString()} Hz` : undefined} /></dl> : <p className="no-data">No audio stream found.</p>}
             </>}
             <div className="section-title">EMBEDDED TAGS</div>
-            {Object.keys(probe.format?.tags ?? {}).length ? <dl className="property-list">{Object.entries(probe.format?.tags ?? {}).map(([key, value]) => <Property key={key} label={key} value={value} />)}</dl> : <p className="no-data">No embedded tags found.</p>}
+            <EmbeddedTags tags={probe.format?.tags ?? {}} />
             <details className="raw-details"><summary>View raw metadata</summary><pre>{JSON.stringify(probe, null, 2)}</pre></details>
           </>}
         </div> : <div className="details-empty"><div className="details-empty-icon"><Icon name="info" size={27} /></div><h3>Nothing selected</h3><p>Choose a media file from the browser to see its metadata here.</p>{error && <div className="notice error" role="alert">{error}</div>}</div>)}

@@ -99,9 +99,9 @@ function extractComfy(nodes: Graph, result: GenerationMetadata, savedWorkflow: u
       seedFrom(node.inputs.value ?? node.inputs.seed ?? node.inputs.noise_seed, kind, `${source} → ${label}`, visited)
     } else result.warnings.push(`Cannot resolve seed through ${label}.`)
   }
-  const outputs = Object.keys(nodes).filter(id => /^(VHS_VideoCombine|SaveVideo|SaveAnimatedWEBP|SaveAnimatedPNG)$/i.test(nodes[id].class_type))
+  const outputs = Object.keys(nodes).filter(id => /^(VHS_VideoCombine|SaveVideo|SaveAnimatedWEBP|SaveAnimatedPNG|SaveImage)$/i.test(nodes[id].class_type))
   if (!outputs.length) {
-    result.warnings.push('No supported video output node was found. The execution graph is available in raw metadata.')
+    result.warnings.push('No supported media output node was found. The execution graph is available in raw metadata.')
     return
   }
   const reachable = new Set<string>()
@@ -156,7 +156,7 @@ function extractComfy(nodes: Graph, result: GenerationMetadata, savedWorkflow: u
       result.warnings.push(`Cannot resolve prompt through ${label}.`)
       return
     }
-    if (!/^(Text|PrimitiveNode|PrimitiveString(?:Multiline)?|CLIPTextEncode(?:SDXL|SDXLRefiner)?|ConditioningCombine|ConditioningConcat|ConditioningAverage|MiniMaxH3(?:ImageToVideo|ReferenceToVideo))$/i.test(node.class_type)) {
+    if (!/^(Text|PrimitiveNode|PrimitiveString(?:Multiline)?|CLIPTextEncode(?:SDXL|SDXLRefiner)?|ConditioningCombine|ConditioningConcat|ConditioningAverage|ReferenceLatent|MiniMaxH3(?:ImageToVideo|ReferenceToVideo))$/i.test(node.class_type)) {
       result.warnings.push(`${label} may transform the text. The displayed text is its input, not a reconstructed output.`)
     }
     for (const [name, input] of fields) textFrom(input, /negative/i.test(name) ? 'negative' : kind, label, depth + 1)

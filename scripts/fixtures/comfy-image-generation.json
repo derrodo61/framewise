@@ -1,0 +1,147 @@
+{
+  "9": {
+    "inputs": {
+      "filename_prefix": "Fluxtrait-Klein9B-V3-DualMode",
+      "images": [
+        "65",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "4. Save character portraits"
+    }
+  },
+  "63": {
+    "inputs": {
+      "cfg": 1.0,
+      "model": [
+        "108",
+        0
+      ],
+      "positive": [
+        "103",
+        0
+      ],
+      "negative": [
+        "104",
+        0
+      ]
+    },
+    "class_type": "CFGGuider",
+    "_meta": {
+      "title": "Prompt guidance"
+    }
+  },
+  "64": {
+    "inputs": {
+      "noise": [
+        "73",
+        0
+      ],
+      "guider": [
+        "63",
+        0
+      ],
+      "sampler": [
+        "61",
+        0
+      ],
+      "sigmas": [
+        "62",
+        0
+      ],
+      "latent_image": [
+        "66",
+        0
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "Generate the image"
+    }
+  },
+  "65": {
+    "inputs": {
+      "samples": [
+        "64",
+        0
+      ],
+      "vae": [
+        "72",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "Decode to visible pixels"
+    }
+  },
+  "67": {
+    "inputs": {
+      "text": "",
+      "clip": [
+        "71",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Negative prompt (unused at CFG 1)"
+    }
+  },
+  "73": {
+    "inputs": {
+      "noise_seed": 793244420502762
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "Seed - randomize for new faces"
+    }
+  },
+  "74": {
+    "inputs": {
+      "text": "instapic\nthe woman from the reference image sits in front of a white wall",
+      "clip": [
+        "71",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "3. Describe your character here"
+    }
+  },
+  "103": {
+    "inputs": {
+      "conditioning": [
+        "74",
+        0
+      ],
+      "latent": [
+        "102",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "Use starting image - positive"
+    }
+  },
+  "104": {
+    "inputs": {
+      "conditioning": [
+        "67",
+        0
+      ],
+      "latent": [
+        "102",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "Use starting image - negative"
+    }
+  }
+}

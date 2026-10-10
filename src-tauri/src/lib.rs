@@ -14,6 +14,7 @@ mod tags;
 mod workspace_search;
 mod media_filters;
 mod trash_media;
+mod png_metadata;
 #[cfg(desktop)]
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
@@ -241,6 +242,9 @@ async fn inspect_video(path: String, state: tauri::State<'_, AppState>) -> Resul
 }
 
 fn inspect_video_file(resolved: &Path) -> Result<serde_json::Value, String> {
+    if resolved.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("png")) {
+        return png_metadata::inspect(resolved).map_err(|error| format!("Could not read PNG metadata: {error}"));
+    }
     let started = Instant::now();
     let output = run_ffprobe(resolved)
         .map_err(|error| {

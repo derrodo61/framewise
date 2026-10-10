@@ -30,6 +30,8 @@ tauri-plugin-opener = "2"
 caseless = "0.2.2"
 unicode-normalization = "0.1.25"
 sha2 = "0.11.0"
+flate2 = "1.1"
+crc32fast = "1.5"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-window-state = "2.5.0"
