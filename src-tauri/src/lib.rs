@@ -15,6 +15,7 @@ mod workspace_search;
 mod media_filters;
 mod trash_media;
 mod png_metadata;
+mod ratings;
 #[cfg(desktop)]
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
@@ -31,6 +32,7 @@ struct FileEntry {
     modified_at: Option<u64>,
     created_at: Option<u64>,
     video_id: Option<i64>,
+    rating: Option<u8>,
     #[serde(skip)]
     modified_ns: Option<String>,
 }
@@ -128,6 +130,7 @@ fn list_folder(path: &Path, root: &Path) -> Result<DirectoryListing, String> {
             path: path.to_string_lossy().into_owned(),
             is_directory: file_type.is_dir(),
             video_id: None,
+            rating: None,
             modified_ns: metadata.as_ref().and_then(|metadata| metadata.modified().ok())
                 .and_then(|time| time.duration_since(UNIX_EPOCH).ok()).map(|duration| duration.as_nanos().to_string()),
             size: if file_type.is_file() { metadata.as_ref().map(|metadata| metadata.len()) } else { None },
@@ -170,6 +173,12 @@ fn register_browsed_videos(mut listing: DirectoryListing) -> DirectoryListing {
     match catalog::register_folder(Path::new(&listing.path), &present, &observed) {
         Ok(ids) => { for entry in &mut listing.entries { entry.video_id = ids.get(&entry.path).copied(); } }
         Err(error) => { log::error!("Could not register browsed videos: {error}"); listing.catalog_warning = Some(format!("Organization records could not be updated: {error}")); }
+    }
+    if listing.catalog_warning.is_none() {
+        match database::with_connection(|connection| ratings::folder_ratings_on(connection, Path::new(&listing.path))) {
+            Ok(ratings) => { for entry in &mut listing.entries { entry.rating = entry.video_id.and_then(|id| ratings.get(&id).copied()); } }
+            Err(error) => { listing.catalog_warning = Some(format!("Ratings could not be read: {error}")); }
+        }
     }
     listing
 }
@@ -744,7 +753,7 @@ pub fn run() {
         .manage(AppState::default())
         .manage(workspace_search::ScanState::default())
         .manage(move_files::MoveState::default())
-        .invoke_handler(tauri::generate_handler![select_root, list_directory, reveal_in_file_manager, move_videos_to_trash, move_folder_to_trash, duplicate::duplicate_video, rename::rename_video, rename::rename_folder, move_files::begin_move, move_files::move_session, move_files::list_move_directory, move_files::create_move_folder, move_files::create_media_folder, move_files::move_selected, preferences::load_preferences, preferences::save_preferences, tags::list_tags, tags::create_tag, tags::rename_tag, tags::delete_tag, tags::filter_folder_videos, workspace_search::start_workspace_scan, workspace_search::workspace_scan_status, workspace_search::cancel_workspace_scan, workspace_search::search_workspace, tags::selection_tags, tags::set_video_tag, tags::add_video_tags, tags::create_and_assign_tag, inspect_video, prepare_image_preview, prepare_preview, generate_preview_thumbnail, preview_cache_directory, preview_index_location, editor::prepare_edit, editor::video_frame_times, editor::export::export_edit])
+        .invoke_handler(tauri::generate_handler![select_root, list_directory, reveal_in_file_manager, move_videos_to_trash, move_folder_to_trash, duplicate::duplicate_video, rename::rename_video, rename::rename_folder, move_files::begin_move, move_files::move_session, move_files::list_move_directory, move_files::create_move_folder, move_files::create_media_folder, move_files::move_selected, preferences::load_preferences, preferences::save_preferences, tags::list_tags, tags::create_tag, tags::rename_tag, tags::delete_tag, tags::filter_folder_videos, workspace_search::start_workspace_scan, workspace_search::workspace_scan_status, workspace_search::cancel_workspace_scan, workspace_search::search_workspace, ratings::set_media_rating, tags::selection_tags, tags::set_video_tag, tags::add_video_tags, tags::create_and_assign_tag, inspect_video, prepare_image_preview, prepare_preview, generate_preview_thumbnail, preview_cache_directory, preview_index_location, editor::prepare_edit, editor::video_frame_times, editor::export::export_edit])
         .run(tauri::generate_context!())
         .expect("error while building Tauri application");
 }

@@ -1,14 +1,16 @@
+import { allRatings, filterRatings, ratingFilterLabel } from './mediaRatings'
+import type { RatingFilterState } from './mediaRatings'
 import type { DirectoryListing, FileEntry, TrashBatchResult } from './mediaModel'
 import type { DateBounds, DateFilterState } from './mediaDates'
 import { filterMediaDates } from './mediaDates'
 import { filterMediaTypes } from './mediaTypes'
 
-type FilterSnapshot = { expectedRoot: string; date: { field: 'created' | 'modified'; from: number | null; to: number | null }; showVideos: boolean; showImages: boolean }
+type FilterSnapshot = { expectedRoot: string; date: { field: 'created' | 'modified'; from: number | null; to: number | null }; showVideos: boolean; showImages: boolean; rating?: RatingFilterState }
 export type TrashRequest = { kind: 'folder' | 'files'; paths: string[]; filter: FilterSnapshot; title: string; message: string; name: string }
-export function prepareTrash({ file, selectedPaths, entries, ready, root, dates, dateState, showVideos, showImages }: { file: FileEntry; selectedPaths: readonly string[]; entries: readonly FileEntry[]; ready: boolean; root: string | null; dates: DateBounds; dateState: DateFilterState; showVideos: boolean; showImages: boolean }): TrashRequest {
+export function prepareTrash({ file, selectedPaths, entries, ready, root, dates, dateState, showVideos, showImages, rating = allRatings }: { file: FileEntry; selectedPaths: readonly string[]; entries: readonly FileEntry[]; ready: boolean; root: string | null; dates: DateBounds; dateState: DateFilterState; showVideos: boolean; showImages: boolean; rating?: RatingFilterState }): TrashRequest {
   if (!root) throw new Error('Choose a workspace first.')
   const paths = [...new Set(file.isDirectory ? [file.path] : selectedPaths.includes(file.path) ? selectedPaths : [file.path])]
-  const matching = filterMediaDates(filterMediaTypes(entries, showVideos, showImages), dates).filter(entry => !entry.isDirectory && paths.includes(entry.path))
+  const matching = filterRatings(filterMediaDates(filterMediaTypes(entries, showVideos, showImages), dates), rating).filter(entry => !entry.isDirectory && paths.includes(entry.path))
   if (!file.isDirectory && (!ready || dates.error || !paths.length || matching.length !== paths.length)) throw new Error('The selection no longer matches the displayed results. Refresh and select the files again. No files were deleted.')
   const count = paths.length
   const selectedDates = matching.map(entry => dates.field === 'created' ? entry.createdAt : entry.modifiedAt).filter((value): value is number => value != null)
@@ -17,9 +19,9 @@ export function prepareTrash({ file, selectedPaths, entries, ready, root, dates,
   const summary = `\n\nDate filter: ${dates.field === 'created' ? 'Created' : 'Modified'} · ${range}.\nSelected file dates: ${span}${selectedDates.length < count ? ` (${count - selectedDates.length} unavailable)` : ''}.`
   return {
     kind: file.isDirectory ? 'folder' : 'files', paths, name: file.name,
-    filter: { expectedRoot: root, date: { field: dates.field, from: dates.from, to: dates.to }, showVideos, showImages },
+    filter: { expectedRoot: root, date: { field: dates.field, from: dates.from, to: dates.to }, showVideos, showImages, rating: { ...rating } },
     title: file.isDirectory ? 'Move folder to Trash' : count === 1 ? 'Move file to Trash' : `Move ${count} files to Trash`,
-    message: (file.isDirectory ? `Move folder “${file.name}” and everything inside it to Trash?` : count === 1 ? `Move “${file.name}” to Trash?` : `Move ${count} selected files to Trash?`) + ` You can restore ${file.isDirectory ? 'it' : 'them'} from your system's Trash or Recycle Bin.` + (file.isDirectory ? '' : summary),
+    message: (file.isDirectory ? `Move folder “${file.name}” and everything inside it to Trash?` : count === 1 ? `Move “${file.name}” to Trash?` : `Move ${count} selected files to Trash?`) + ` You can restore ${file.isDirectory ? 'it' : 'them'} from your system's Trash or Recycle Bin.` + (file.isDirectory ? '' : summary + `\nRating filter: ${ratingFilterLabel(rating)}.`),
   }
 }
 export async function executeTrash(request: TrashRequest, services: { confirm: (request: TrashRequest) => Promise<boolean>; beforeMove: () => void; move: (request: TrashRequest) => Promise<TrashBatchResult> }) {

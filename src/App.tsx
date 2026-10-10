@@ -1,3 +1,7 @@
+import RatingFilter from './RatingFilter'
+import { MediaRating, RatingDialog } from './MediaRating'
+import type { RatingUpdate } from './MediaRating'
+import type { RatingFilterState } from './mediaRatings'
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent } from 'react'
@@ -245,6 +249,7 @@ function App() {
   const [editingFile, setEditingFile] = useState<FileEntry | null>(null)
   const [contextMenu, setContextMenu] = useState<{ file: FileEntry; x: number; y: number } | null>(null)
   const [tagBatch, setTagBatch] = useState<NamedTagVideo[] | null>(null)
+  const [ratingBatch, setRatingBatch] = useState<(NamedTagVideo & { rating?: number | null })[] | null>(null)
   const [tagRevision, setTagRevision] = useState(0)
   const tagReturnPath = useRef<string | null>(null)
   const [fileAction, setFileAction] = useState<{ message: string; error: boolean } | null>(null)
@@ -261,7 +266,7 @@ function App() {
   const [view, setView] = useState<'media' | 'settings'>('media')
   const [settingsTab, setSettingsTab] = useState<'settings' | 'tags'>('settings')
   const browser = useMediaBrowser({ root, listing, revision: tagRevision, view, sort: mediaSort, direction: sortDirection })
-  const { showVideos, showImages, dateScope, dates, workspace, tagFilter, workspaceSearch, sortedMediaEntries, mediaEntries, resultsReady, scanRunning } = browser
+  const { rating, showVideos, showImages, dateScope, dates, workspace, tagFilter, workspaceSearch, sortedMediaEntries, mediaEntries, resultsReady, scanRunning } = browser
   const selection = useMediaSelection(mediaEntries, resultsReady)
   const { selectedPaths, setSelectedPaths, selectionAnchor } = selection
   const [theme, setTheme] = useState<'light' | 'dark'>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
@@ -517,6 +522,26 @@ function App() {
     changeTagFilters(tagFilter.ids, tagFilter.matchAll)
     pendingFocus.current = null
     browser.setTypes(videos, images)
+  }
+  function ratingsChanged(updates: RatingUpdate[]) {
+    const apply = (entry: FileEntry): FileEntry => {
+      const update = updates.find(update => update.videoId === entry.videoId)
+      return update ? { ...entry, rating: update.rating } : entry
+    }
+    setListing(previous => previous ? { ...previous, entries: previous.entries.map(apply) } : previous)
+    setSelected(previous => previous ? apply(previous) : previous)
+    setTagRevision(value => value + 1)
+  }
+  function openRatings(file: FileEntry) {
+    const entries = selectedPaths.includes(file.path) ? mediaEntries.filter(entry => selectedPaths.includes(entry.path)) : [file]
+    setContextMenu(null)
+    if (!entries.length || entries.some(entry => entry.isDirectory || entry.videoId == null) || scanRunning) return
+    setRatingBatch(entries.map(entry => ({ videoId: entry.videoId!, path: entry.path, name: entry.name, rating: entry.rating })))
+  }
+  function changeRatingFilter(value: RatingFilterState) {
+    changeTagFilters(tagFilter.ids, tagFilter.matchAll)
+    pendingFocus.current = null
+    browser.setRating(value)
   }
   function changeDates(value: DateFilterState) {
     changeTagFilters(tagFilter.ids, tagFilter.matchAll)
@@ -778,7 +803,7 @@ function App() {
     setContextMenu(null)
     let paths: string[] = []
     try {
-      const request = prepareTrash({ file, selectedPaths, entries: mediaEntries, ready: resultsReady, root, dates, dateState: dateScope.value, showVideos, showImages })
+      const request = prepareTrash({ file, selectedPaths, entries: mediaEntries, ready: resultsReady, root, dates, dateState: dateScope.value, showVideos, showImages, rating })
       paths = request.kind === 'files' ? request.paths : []
       let currentRequest = 0
       const outcome = await executeTrash(request, {
@@ -1023,6 +1048,7 @@ function App() {
           <TagFilter filter={tagFilter} count={workspace ? workspaceSearch.total : videoCount} total={totalVideoCount} onChange={changeTagFilters} workspace={workspace} onScopeChange={changeSearchScope} ready={resultsReady} />
           <div className="media-type-filters" role="group" aria-label="Media types"><label><input type="checkbox" checked={showVideos} onChange={event => changeMediaTypes(event.target.checked, showImages)} /> Videos</label><label><input type="checkbox" checked={showImages} onChange={event => changeMediaTypes(showVideos, event.target.checked)} /> Images</label></div>
           <DateFilter value={dateScope.value} error={dates.error} onChange={changeDates} />
+          <RatingFilter value={rating} onChange={changeRatingFilter} />
           {workspace && <div className="workspace-discovery">
             <div className="workspace-scan-actions"><span role="status">{scanRunning ? 'Scanning workspace…' : workspaceSearch.scan?.status === 'complete' ? 'Scan complete' : workspaceSearch.scan?.status === 'cancelled' ? 'Scan cancelled — results may be incomplete' : 'Workspace catalog'} · {workspaceSearch.scan?.folders ?? 0} folders · {workspaceSearch.scan?.videos ?? 0} files discovered</span><button onClick={scanRunning ? workspaceSearch.cancel : workspaceSearch.rescan}>{scanRunning ? 'Cancel scan' : 'Scan workspace'}</button></div>
             {scanRunning && <><progress aria-label="Scanning workspace" /><p title={displayPath(workspaceSearch.scan!.currentFolder)}>{displayPath(workspaceSearch.scan!.currentFolder)}</p><p>File changes and tag assignments are available when scanning finishes.</p></>}
@@ -1049,6 +1075,7 @@ function App() {
                 ? isImage(entry.path) ? <ImagePreview path={entry.path} revision={workspace ? workspaceSearch.thumbnailRevision : listing} thumbnail /> : <MediaThumbnail path={entry.path} revision={workspace ? workspaceSearch.thumbnailRevision : listing} placeholder={<Icon name="film" size={32} />} />
                 : <span className={`file-icon ${entry.isDirectory ? 'folder-icon' : 'video-icon'}`}><Icon name={entry.isDirectory ? 'folder' : isImage(entry.path) ? 'image' : 'film'} size={mediaView === 'grid' ? 32 : 19} /></span>}
               <span className="file-name" title={entry.name}>{entry.name}</span>
+              {!entry.isDirectory && entry.rating != null && <span className="file-rating" aria-label={`${entry.rating} out of 5 stars`} title={`${entry.rating} out of 5 stars`}>{'★'.repeat(entry.rating)}</span>}
               {workspace && <span className="result-location" title={displayPath(parentPath(entry.path))}>{displayPath(parentPath(entry.path).slice(root!.replace(/[\\/]$/, '').length).replace(/^[\\/]/, '')) || 'Workspace root'}</span>}
               <span className="file-kind">{entry.isDirectory ? 'Folder' : fileSize(entry.size)}</span>
               <Icon name="chevron" size={16} />
@@ -1071,6 +1098,8 @@ function App() {
           {selectedImage ? <ImagePreview path={selected.path} revision={selected} /> : <VideoPreview file={selected} playbackAction={playbackRequest?.path === selected.path ? playbackRequest.action : null} onPlayRequestHandled={() => setPlaybackRequest(null)} />}
           <div className="selected-file"><span className="selected-file-icon"><Icon name={selectedImage ? 'image' : 'film'} size={27} /></span><div><strong title={selected.name}>{selected.name}</strong><span>{fileSize(selected.size)}</span></div></div>
           <dl className="property-list"><Property label="Modified" value={selected.modifiedAt === null ? 'Unavailable' : new Date(selected.modifiedAt).toLocaleString()} /><Property label="Created" value={selected.createdAt == null ? 'Unavailable' : new Date(selected.createdAt).toLocaleString()} /></dl>
+          <div className="section-title">RATING</div>
+          {selected.videoId != null ? <MediaRating key={`rating:${selected.path}:${selected.videoId}`} files={[{ videoId: selected.videoId, path: selected.path, name: selected.name }]} rating={selected.rating ?? null} disabled={scanRunning} onChanged={ratingsChanged} /> : <p className="no-data">Refresh the folder to enable ratings.</p>}
           {probe && video && !selectedImage && <button className="inspector-edit" disabled={scanRunning} onClick={() => editFile(selected)}>Edit video</button>}
           <section aria-label="Media tags"><div className="section-title">TAGS</div>{selected.videoId
             ? <VideoTags key={`${selected.path}:${selected.videoId}`} videos={[{ videoId: selected.videoId, path: selected.path }]} refreshToken={tagRevision} onChanged={() => setTagRevision(value => value + 1)} />
@@ -1106,12 +1135,14 @@ function App() {
       </> : <>
         {!isImage(contextMenu.file.path) && <button className="edit-menu-item" role="menuitem" disabled={scanRunning} onClick={() => editFile(contextMenu.file)}>Edit video</button>}
         <button className="edit-menu-item" role="menuitem" disabled={scanRunning} onClick={() => openVideoTags(contextMenu.file)}>Edit tags…{selectedPaths.includes(contextMenu.file.path) && selectedPaths.length > 1 ? ` (${selectedPaths.length})` : ''}</button>
+        <button role="menuitem" disabled={scanRunning || contextMenu.file.videoId == null} onClick={() => openRatings(contextMenu.file)}>Rate…{selectedPaths.includes(contextMenu.file.path) && selectedPaths.length > 1 ? ` (${selectedPaths.length})` : ''}</button>
         <button className="rename-menu-item" role="menuitem" disabled={scanRunning} onClick={() => openRename(contextMenu.file)}>Rename</button>
         <button className="move-menu-item" role="menuitem" disabled={scanRunning} onClick={() => void openMoveWindow(contextMenu.file)}>Move to…{selectedPaths.includes(contextMenu.file.path) && selectedPaths.length > 1 ? ` (${selectedPaths.length})` : ''}</button>
         <button className="duplicate-menu-item" role="menuitem" disabled={scanRunning} onClick={() => void duplicateFile(contextMenu.file)}>Duplicate</button>
         <button role="menuitem" disabled={scanRunning} onClick={() => void moveEntryToTrash(contextMenu.file)}>{selectedPaths.includes(contextMenu.file.path) && selectedPaths.length > 1 ? `Move ${selectedPaths.length} files to Trash` : 'Move to Trash'}</button>
       </>}
     </div>}
+    {ratingBatch && <RatingDialog files={ratingBatch} onChanged={ratingsChanged} onClose={() => setRatingBatch(null)} />}
     {tagBatch && <TagBatchDialog videos={tagBatch} onChanged={() => setTagRevision(value => value + 1)} onClose={closeVideoTags} />}
     {renameTarget && <div className="rename-backdrop">
       <form className="rename-dialog" role="dialog" aria-modal="true" aria-labelledby="rename-title" onSubmit={event => { event.preventDefault(); void renameFile() }} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); closeRename() } }}>

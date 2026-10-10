@@ -157,7 +157,13 @@ fn search_types_on(connection: &mut Connection, root: &Path, tags: &[i64], match
 }
 pub(crate) use crate::media_filters::DateRange;
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn search_dates_on(connection: &mut Connection, root: &Path, tags: &[i64], match_all: bool, sort: &str, descending: bool, page: usize, types: (bool, bool), dates: &DateRange) -> Result<SearchPage, String> {
+    search_ratings_on(connection, root, tags, match_all, sort, descending, page, types, dates, &crate::ratings::RatingFilter::default())
+}
+#[allow(clippy::too_many_arguments)]
+fn search_ratings_on(connection: &mut Connection, root: &Path, tags: &[i64], match_all: bool, sort: &str, descending: bool, page: usize, types: (bool, bool), dates: &DateRange, rating: &crate::ratings::RatingFilter) -> Result<SearchPage, String> {
+    let rating_predicate = rating.sql()?;
     if dates.from.zip(dates.to).is_some_and(|(from, to)| from >= to) { return Err("From must be on or before To.".into()); }
     let date_column = match dates.field.as_str() { "created" => "v.created_at", "modified" => "CAST(v.modified_ns AS INTEGER)/1000000", _ => return Err("Unsupported date field".into()) };
     let transaction = connection.transaction().map_err(|error| error.to_string())?;
@@ -166,19 +172,19 @@ fn search_dates_on(connection: &mut Connection, root: &Path, tags: &[i64], match
     let count: i64 = transaction.query_row("SELECT COUNT(*) FROM workspace_filter_tags", [], |row| row.get::<_, i64>(0)).map_err(|error| error.to_string())?;
     let (lower, upper) = bounds(root);
     let predicate = "v.status='active' AND v.path>=?1 AND v.path<?2 AND ((v.media_kind='video' AND ?5) OR (v.media_kind='image' AND ?6)) AND (?3=0 OR (?4 AND (SELECT COUNT(*) FROM video_tags vt JOIN workspace_filter_tags f ON f.id=vt.tag_id WHERE vt.video_id=v.id)=?3) OR (NOT ?4 AND EXISTS(SELECT 1 FROM video_tags vt JOIN workspace_filter_tags f ON f.id=vt.tag_id WHERE vt.video_id=v.id)))";
-    let predicate = format!("{predicate} AND (?7 IS NULL OR {date_column}>=?7) AND (?8 IS NULL OR {date_column}<?8)");
+    let predicate = format!("{predicate} AND (?7 IS NULL OR {date_column}>=?7) AND (?8 IS NULL OR {date_column}<?8) AND {rating_predicate}");
     let total = transaction.query_row(&format!("SELECT COUNT(*) FROM videos v WHERE {predicate}"), params![lower, upper, count, match_all, types.0, types.1, dates.from, dates.to], |row| row.get::<_, i64>(0)).map_err(|error| error.to_string())?;
-    let total_videos = transaction.query_row(&format!("SELECT COUNT(*) FROM videos v WHERE status='active' AND path>=?1 AND path<?2 AND ((media_kind='video' AND ?3) OR (media_kind='image' AND ?4)) AND (?5 IS NULL OR {date_column}>=?5) AND (?6 IS NULL OR {date_column}<?6)"), params![lower, upper, types.0, types.1, dates.from, dates.to], |row| row.get::<_, i64>(0)).map_err(|error| error.to_string())?;
+    let total_videos = transaction.query_row(&format!("SELECT COUNT(*) FROM videos v WHERE status='active' AND path>=?1 AND path<?2 AND ((media_kind='video' AND ?3) OR (media_kind='image' AND ?4)) AND (?5 IS NULL OR {date_column}>=?5) AND (?6 IS NULL OR {date_column}<?6) AND {rating_predicate}"), params![lower, upper, types.0, types.1, dates.from, dates.to], |row| row.get::<_, i64>(0)).map_err(|error| error.to_string())?;
     let total = usize::try_from(total).map_err(|error| error.to_string())?;
     let total_videos = usize::try_from(total_videos).map_err(|error| error.to_string())?;
     let page = page.min(total.saturating_sub(1) / PAGE_SIZE);
     let direction = if descending { "DESC" } else { "ASC" };
     let order = if sort == "modified" { "CAST(v.modified_ns AS INTEGER)" } else { "v.name COLLATE NOCASE" };
     let entries = {
-        let mut statement = transaction.prepare(&format!("SELECT v.id,v.path,v.name,v.size,v.modified_ns,v.created_at FROM videos v WHERE {predicate} ORDER BY {order} {direction},v.name COLLATE NOCASE {direction},v.path {direction} LIMIT ?9 OFFSET ?10")).map_err(|error| error.to_string())?;
+        let mut statement = transaction.prepare(&format!("SELECT v.id,v.path,v.name,v.size,v.modified_ns,v.created_at,v.rating FROM videos v WHERE {predicate} ORDER BY {order} {direction},v.name COLLATE NOCASE {direction},v.path {direction} LIMIT ?9 OFFSET ?10")).map_err(|error| error.to_string())?;
         statement.query_map(params![lower, upper, count, match_all, types.0, types.1, dates.from, dates.to, PAGE_SIZE as i64, (page * PAGE_SIZE) as i64], |row| {
             let modified: String = row.get(4)?;
-            Ok(crate::FileEntry { video_id: Some(row.get(0)?), path: row.get(1)?, name: row.get(2)?, size: u64::try_from(row.get::<_, i64>(3)?).ok(), modified_at: modified.parse::<u128>().ok().and_then(|n| u64::try_from(n / 1_000_000).ok()), created_at: row.get::<_, Option<i64>>(5)?.and_then(|n| u64::try_from(n).ok()), modified_ns: Some(modified), is_directory: false })
+            Ok(crate::FileEntry { video_id: Some(row.get(0)?), path: row.get(1)?, name: row.get(2)?, size: u64::try_from(row.get::<_, i64>(3)?).ok(), modified_at: modified.parse::<u128>().ok().and_then(|n| u64::try_from(n / 1_000_000).ok()), created_at: row.get::<_, Option<i64>>(5)?.and_then(|n| u64::try_from(n).ok()), modified_ns: Some(modified), rating: row.get(6)?, is_directory: false })
         }).map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?
     };
     transaction.commit().map_err(|error| error.to_string())?;
@@ -188,11 +194,11 @@ fn search_dates_on(connection: &mut Connection, root: &Path, tags: &[i64], match
 pub(crate) async fn search_workspace(query: WorkspaceQuery, state: tauri::State<'_, crate::AppState>) -> Result<SearchPage, String> {
     let root = crate::selected_root(&state)?;
     if root.to_string_lossy() != query.expected_root { return Err("Workspace changed; results discarded.".into()); }
-    tauri::async_runtime::spawn_blocking(move || crate::database::with_connection(|connection| search_dates_on(connection, &root, &query.tag_ids, query.match_all, &query.sort, query.descending, query.page, (query.show_videos, query.show_images), &query.date_range))).await.map_err(|error| error.to_string())?
+    tauri::async_runtime::spawn_blocking(move || crate::database::with_connection(|connection| search_ratings_on(connection, &root, &query.tag_ids, query.match_all, &query.sort, query.descending, query.page, (query.show_videos, query.show_images), &query.date_range, &query.rating))).await.map_err(|error| error.to_string())?
 }
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct WorkspaceQuery { expected_root: String, tag_ids: Vec<i64>, match_all: bool, sort: String, descending: bool, page: usize, show_videos: bool, show_images: bool, #[serde(default)] date_range: DateRange }
+pub(crate) struct WorkspaceQuery { expected_root: String, tag_ids: Vec<i64>, match_all: bool, sort: String, descending: bool, page: usize, show_videos: bool, show_images: bool, #[serde(default)] date_range: DateRange, #[serde(default)] rating: crate::ratings::RatingFilter }
 
 #[cfg(test)]
 mod tests {
@@ -383,4 +389,32 @@ mod tests {
         assert_eq!(scan_with_progress(&mut connection, &root, &interrupted, || interrupted.cancelled.store(true, Ordering::Relaxed)).unwrap(), "cancelled");
         assert_eq!(search_on(&mut connection, &root, &[], true, "name", false, 0).unwrap().total, 1);
     }
+    #[test]
+    fn rating_filters_combine_with_types_tags_dates_and_pagination() {
+        use crate::ratings::{RatingFilter, RatingMode};
+        let fixture = Fixture::new(); let root = fixture.folder.canonicalize().unwrap();
+        let mut connection = open_at(&fixture.path).unwrap();
+        connection.execute("INSERT INTO tags VALUES (1,'Keep','keep')", []).unwrap();
+        for index in 0..410 {
+            let rating = if index < 205 { Some(4) } else if index < 408 { Some(3) } else { None };
+            let kind = if index == 409 { "image" } else { "video" };
+            connection.execute("INSERT INTO videos(path,parent_path,name,size,modified_ns,status,last_seen_at,media_kind,rating) VALUES (?1,?2,?3,1,'2000000000','active',1,?4,?5)", params![root.join(format!("{index:03}.mp4")).to_string_lossy(), root.to_string_lossy(), format!("{index:03}.mp4"), kind, rating]).unwrap();
+            connection.execute("INSERT INTO video_tags VALUES (?1,1)", [connection.last_insert_rowid()]).unwrap();
+        }
+        let dates = DateRange { field: "modified".into(), from: Some(2000), to: Some(3000) };
+        let filter = RatingFilter { mode: RatingMode::MoreThan, value: 3 };
+        let first = search_ratings_on(&mut connection, &root, &[1], true, "name", false, 0, (true, true), &dates, &filter).unwrap();
+        assert_eq!((first.total, first.total_videos, first.entries.len()), (205,205,200));
+        assert!(first.entries.iter().all(|entry| entry.rating == Some(4)));
+        let second = search_ratings_on(&mut connection, &root, &[1], true, "name", false, 1, (true, true), &dates, &filter).unwrap();
+        assert_eq!(second.entries.len(), 5);
+        assert!(!first.entries.iter().any(|a| second.entries.iter().any(|b| a.video_id == b.video_id)));
+        for (mode, value, expected) in [(RatingMode::Exactly,3,203),(RatingMode::AtLeast,3,408),(RatingMode::Unrated,3,2),(RatingMode::MoreThan,5,0)] {
+            assert_eq!(search_ratings_on(&mut connection, &root, &[], true, "name", false, 0, (true,true), &dates, &RatingFilter { mode,value }).unwrap().total, expected);
+        }
+        let unrated = search_ratings_on(&mut connection, &root, &[1], true, "name", false, 0, (true,false), &dates, &RatingFilter { mode: RatingMode::Unrated, value:3 }).unwrap();
+        assert_eq!(unrated.total,1); assert!(unrated.entries[0].rating.is_none());
+        assert!(search_ratings_on(&mut connection, &root, &[], true, "name", false, 0, (true,true), &dates, &RatingFilter { mode: RatingMode::Exactly,value:6 }).is_err());
+    }
+
 }

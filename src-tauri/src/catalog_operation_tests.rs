@@ -103,6 +103,7 @@ fn copy_save_as_and_save_have_the_intended_tag_identity() {
     let mut connection = open_at(&fixture.path).unwrap();
     let source = fixture.folder.join("clip.mp4");
     let id = seed(&mut connection, &source);
+    connection.execute("UPDATE videos SET rating=5 WHERE id=?1", [id]).unwrap();
     for (name, bytes) in [("clip (1).mp4", b"original video".as_slice()), ("edited.mp4", b"shorter render".as_slice())] {
         let destination = fixture.folder.join(name);
         let operation = start(&mut connection, &fixture, Action::Copy, vec![source.clone()], vec![Some(destination.clone())]);
@@ -111,12 +112,14 @@ fn copy_save_as_and_save_have_the_intended_tag_identity() {
         let copied_id = active_id(&connection, &destination);
         assert_ne!(copied_id, id);
         assert_eq!(tags(&connection, copied_id), 1);
+        assert_eq!(connection.query_row("SELECT rating FROM videos WHERE id=?1", [copied_id], |row| row.get::<_, u8>(0)).unwrap(), 5);
     }
     let replacement = start(&mut connection, &fixture, Action::Replace, vec![source.clone()], vec![Some(source.clone())]);
     fs::write(&source, b"new edited video contents").unwrap();
     finish(&mut connection, &replacement);
     assert_eq!(active_id(&connection, &source), id);
     assert_eq!(tags(&connection, id), 1);
+    assert_eq!(connection.query_row("SELECT rating FROM videos WHERE id=?1", [id], |row| row.get::<_, u8>(0)).unwrap(), 5);
     assert_eq!(ensure_observed_on(&connection, &observe(&source).unwrap()).unwrap(), id);
 }
 
@@ -252,4 +255,27 @@ fn batch_moves_preserve_each_identity_even_when_copying_changes_file_times() {
     assert_eq!(tags(&connection, first_id), 1);
     assert_eq!(tags(&connection, second_id), 1);
     assert_eq!(ensure_observed_on(&connection, &observe(&new_second).unwrap()).unwrap(), second_id);
+}
+
+#[test]
+fn rating_without_tags_survives_move_trash_and_restore() {
+    let fixture = Fixture::new(); let mut connection = open_at(&fixture.path).unwrap();
+    let source = fixture.folder.join("photo.png"); let id = seed(&mut connection, &source);
+    connection.execute("DELETE FROM video_tags WHERE video_id=?1", [id]).unwrap();
+    connection.execute("UPDATE videos SET rating=4 WHERE id=?1", [id]).unwrap();
+    let destination = fixture.folder.join("renamed.png");
+    let operation = start(&mut connection, &fixture, Action::Move, vec![source.clone()], vec![Some(destination.clone())]);
+    fs::rename(source, &destination).unwrap(); finish(&mut connection, &operation);
+    assert_eq!(active_id(&connection, &destination), id);
+    let trash = start(&mut connection, &fixture, Action::Trash, vec![destination.clone()], vec![None]);
+    fs::remove_file(&destination).unwrap(); finish(&mut connection, &trash);
+    fs::write(&destination, b"original video").unwrap();
+    assert_eq!(ensure_observed_on(&connection, &observe(&destination).unwrap()).unwrap(), id);
+    assert_eq!(connection.query_row("SELECT rating FROM videos WHERE id=?1", [id], |row| row.get::<_, u8>(0)).unwrap(), 4);
+    let trash = start(&mut connection, &fixture, Action::Trash, vec![destination.clone()], vec![None]);
+    fs::remove_file(&destination).unwrap(); finish(&mut connection, &trash);
+    fs::write(&destination, b"different clip").unwrap();
+    let new_id = ensure_observed_on(&connection, &observe(&destination).unwrap()).unwrap();
+    assert_ne!(id,new_id);
+    assert_eq!(connection.query_row("SELECT rating FROM videos WHERE id=?1", [new_id], |row| row.get::<_, Option<u8>>(0)).unwrap(), None);
 }

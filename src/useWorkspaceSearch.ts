@@ -1,3 +1,5 @@
+import { allRatings } from './mediaRatings'
+import type { RatingFilterState } from './mediaRatings'
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import type { DateBounds } from './mediaDates'
@@ -8,13 +10,13 @@ type Page = { entries: FileEntry[]; total: number; totalVideos: number; page: nu
 type Scan = { id: number; root: string; status: string; folders: number; videos: number; warnings: number; message: string | null; currentFolder: string }
 const empty: FileEntry[] = []
 
-type SearchOptions = { root: string | null; enabled: boolean; tagIds: number[]; matchAll: boolean; sort: string; descending: boolean; revision: number; listing: DirectoryListing | null; showVideos?: boolean; showImages?: boolean; dates?: DateBounds }
-export function useWorkspaceSearch({ root, enabled, tagIds, matchAll, sort, descending, revision, listing, showVideos = true, showImages = true, dates = noDates }: SearchOptions) {
+type SearchOptions = { root: string | null; enabled: boolean; tagIds: number[]; matchAll: boolean; sort: string; descending: boolean; revision: number; listing: DirectoryListing | null; showVideos?: boolean; showImages?: boolean; dates?: DateBounds; rating?: RatingFilterState }
+export function useWorkspaceSearch({ root, enabled, tagIds, matchAll, sort, descending, revision, listing, showVideos = true, showImages = true, dates = noDates, rating = allRatings }: SearchOptions) {
   const [scan, setScan] = useState<Scan | null>(null)
   const [restart, setRestart] = useState(0)
   const [scanError, setScanError] = useState<{ root: string; message: string } | null>(null)
   const [result, setResult] = useState<{ key: string; listing: object | null; data: Page | null; error: string | null } | null>(null)
-  const filterKey = JSON.stringify([root, tagIds, matchAll, sort, descending, showVideos, showImages, dates.field, dates.from, dates.to])
+  const filterKey = JSON.stringify([root, tagIds, matchAll, sort, descending, showVideos, showImages, dates.field, dates.from, dates.to, rating.mode, rating.value])
   const [pageState, setPageState] = useState({ key: filterKey, page: 0 })
   if (pageState.key !== filterKey) setPageState({ key: filterKey, page: 0 })
   const page = pageState.key === filterKey ? pageState.page : 0
@@ -49,11 +51,11 @@ export function useWorkspaceSearch({ root, enabled, tagIds, matchAll, sort, desc
   useEffect(() => {
     if (!enabled || !root) return
     let alive = true
-    void invoke<Page>('search_workspace', { query: { expectedRoot: root, tagIds, matchAll, sort, descending, page, showVideos, showImages, dateRange: { field: dates.field, from: dates.from, to: dates.to } } })
+    void invoke<Page>('search_workspace', { query: { expectedRoot: root, tagIds, matchAll, sort, descending, page, showVideos, showImages, rating: { mode: rating.mode, value: rating.value }, dateRange: { field: dates.field, from: dates.from, to: dates.to } } })
       .then(data => { if (alive) setResult({ key, listing, data, error: null }) })
       .catch(cause => { if (alive) setResult({ key, listing, data: null, error: String(cause) }) })
     return () => { alive = false }
-  }, [root, enabled, tagIds, matchAll, sort, descending, page, key, listing, showVideos, showImages, dates.field, dates.from, dates.to])
+  }, [root, enabled, tagIds, matchAll, sort, descending, page, key, listing, showVideos, showImages, dates.field, dates.from, dates.to, rating.mode, rating.value])
 
   return {
     entries: ready ? result?.data?.entries ?? empty : empty,

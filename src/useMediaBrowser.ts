@@ -1,3 +1,5 @@
+import { restoreRatingFilter } from './mediaRatings'
+import type { RatingFilterState } from './mediaRatings'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { getPreference, setPreference } from './preferences'
 import { dateBounds, emptyDateFilter, restoreDateFilter } from './mediaDates'
@@ -14,6 +16,7 @@ import { nextSelection } from './mediaSelection'
 export function useMediaBrowser({ root, listing, revision, view, sort, direction }: { root: string | null; listing: DirectoryListing | null; revision: number; view: string; sort: MediaSort; direction: SortDirection }) {
   const [showVideos, setShowVideos] = useState(() => getPreference('framewise.showVideos') !== 'false')
   const [showImages, setShowImages] = useState(() => getPreference('framewise.showImages') !== 'false')
+  const [rating, setRatingState] = useState(() => restoreRatingFilter(getPreference('framewise.ratingFilter')))
   const [dateScope, setDateScope] = useState(() => restoreDateFilter(getPreference('framewise.dateFilter')))
   const [searchScope, setSearchScope] = useState({ root, workspace: false })
   if (root !== null && dateScope.root !== root) setDateScope({ root, value: emptyDateFilter })
@@ -25,14 +28,15 @@ export function useMediaBrowser({ root, listing, revision, view, sort, direction
   const dates = useMemo(() => dateBounds(dateScope.value, localDay), [dateScope.value, localDay])
   const workspace = searchScope.root === root && searchScope.workspace
   const tagFilter = useTagFilter(listing, root, revision, view, !workspace)
-  const workspaceSearch = useWorkspaceSearch({ root, enabled: workspace && view === 'media', tagIds: tagFilter.ids, matchAll: tagFilter.matchAll, sort, descending: direction === 'desc', revision, listing, showVideos, showImages, dates })
-  const resultFilters = useMemo(() => ({ showVideos, showImages, dates, tagActive: tagFilter.active, matchingIds: tagFilter.matches, sort, direction }), [showVideos, showImages, dates, tagFilter.active, tagFilter.matches, sort, direction])
-  const sortedMediaEntries = useMemo(() => folderResults(listing?.entries ?? [], { showVideos, showImages, dates, sort, direction, tagActive: false, matchingIds: [] }), [listing, showVideos, showImages, dates, sort, direction])
+  const workspaceSearch = useWorkspaceSearch({ root, enabled: workspace && view === 'media', tagIds: tagFilter.ids, matchAll: tagFilter.matchAll, sort, descending: direction === 'desc', revision, listing, showVideos, showImages, dates, rating })
+  const resultFilters = useMemo(() => ({ showVideos, showImages, dates, rating, tagActive: tagFilter.active, matchingIds: tagFilter.matches, sort, direction }), [showVideos, showImages, dates, rating, tagFilter.active, tagFilter.matches, sort, direction])
+  const sortedMediaEntries = useMemo(() => folderResults(listing?.entries ?? [], { showVideos, showImages, dates, rating, sort, direction, tagActive: false, matchingIds: [] }), [listing, showVideos, showImages, dates, rating, sort, direction])
   const mediaEntries = useMemo(() => workspace ? workspaceSearch.entries : filterMedia(sortedMediaEntries, tagFilter.active, tagFilter.matches), [workspace, workspaceSearch.entries, sortedMediaEntries, tagFilter.active, tagFilter.matches])
   return {
-    showVideos, showImages, dateScope, dates, workspace, tagFilter, workspaceSearch, resultFilters, sortedMediaEntries, mediaEntries,
+    rating, showVideos, showImages, dateScope, dates, workspace, tagFilter, workspaceSearch, resultFilters, sortedMediaEntries, mediaEntries,
     resultsReady: workspace ? workspaceSearch.ready : tagFilter.ready,
     scanRunning: workspace && workspaceSearch.scan?.status === 'running',
+    setRating: (value: RatingFilterState) => { setRatingState(value); setPreference('framewise.ratingFilter', JSON.stringify(value)) },
     setWorkspace: (workspace: boolean) => setSearchScope({ root, workspace }),
     setDates: (value: DateFilterState) => setDateScope({ root, value }),
     setTypes: (videos: boolean, images: boolean) => {

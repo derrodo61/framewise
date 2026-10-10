@@ -54,14 +54,14 @@ fn catalog_version(connection: &Connection) -> Result<i64, String> {
 
 fn migrate_catalog(connection: &mut Connection, path: &Path, backup_existing: bool) -> Result<(), String> {
     match catalog_version(connection)? {
-        5 => return Ok(()),
-        1..=4 => {},
+        6 => return Ok(()),
+        1..=5 => {},
         0 => {},
         version => return Err(format!("Unsupported Framewise catalog version: {version}")),
     }
     if backup_existing {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|error| error.to_string())?.as_nanos();
-        let backup = path.with_file_name(format!("framewise-before-catalog-v5-{stamp}.db"));
+        let backup = path.with_file_name(format!("framewise-before-catalog-v6-{stamp}.db"));
         // SQLite makes a consistent snapshot including committed WAL contents.
         connection.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])
             .map_err(|error| format!("Cannot back up database before migration: {error}"))?;
@@ -72,7 +72,7 @@ fn migrate_catalog(connection: &mut Connection, path: &Path, backup_existing: bo
     let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|error| error.to_string())?;
     // Another Framewise process might have completed the migration while we backed up.
     let version = catalog_version(&transaction)?;
-    if !(0..=5).contains(&version) { return Err(format!("Unsupported Framewise catalog version: {version}")); }
+    if !(0..=6).contains(&version) { return Err(format!("Unsupported Framewise catalog version: {version}")); }
     if version == 0 {
         transaction.execute_batch("CREATE TABLE catalog_schema (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL);
             INSERT INTO catalog_schema VALUES (1, 1);
@@ -129,6 +129,10 @@ fn migrate_catalog(connection: &mut Connection, path: &Path, backup_existing: bo
             CREATE INDEX media_creation_date ON videos(created_at,path) WHERE status='active';
             UPDATE catalog_schema SET version=5 WHERE id=1;").map_err(|error| format!("Cannot migrate date filtering: {error}"))?;
     }
+    if version < 6 {
+        transaction.execute_batch("ALTER TABLE videos ADD COLUMN rating INTEGER CHECK(rating IS NULL OR (typeof(rating)='integer' AND rating BETWEEN 1 AND 5));
+            UPDATE catalog_schema SET version=6 WHERE id=1;").map_err(|error| format!("Cannot migrate ratings: {error}"))?;
+    }
     transaction.commit().map_err(|error| format!("Cannot commit catalog migration: {error}"))
 }
 
@@ -173,7 +177,7 @@ pub(crate) mod tests {
         // Keep the legacy connection open: the snapshot must include committed WAL data.
         let connection = open_at(&fixture.path).unwrap();
         assert_eq!(connection.query_row("SELECT image_name FROM previews WHERE video_path='clip.mp4'", [], |row| row.get::<_, String>(0)).unwrap(), "cached.png");
-        assert_eq!(catalog_version(&connection).unwrap(), 5);
+        assert_eq!(catalog_version(&connection).unwrap(), 6);
         let backups = fixture.backups();
         assert_eq!(backups.len(), 1);
         let backup = Connection::open(&backups[0]).unwrap();
@@ -235,10 +239,10 @@ pub(crate) mod tests {
             ALTER TABLE videos DROP COLUMN content_hash;
             DROP INDEX media_creation_date; ALTER TABLE videos DROP COLUMN created_at; DROP INDEX media_kind_active_path;
             ALTER TABLE videos DROP COLUMN media_kind;
-            UPDATE catalog_schema SET version=1;").unwrap();
+            ALTER TABLE videos DROP COLUMN rating; UPDATE catalog_schema SET version=1;").unwrap();
         drop(connection);
         let upgraded = open_at(&fixture.path).unwrap();
-        assert_eq!(catalog_version(&upgraded).unwrap(), 5);
+        assert_eq!(catalog_version(&upgraded).unwrap(), 6);
         assert_eq!(upgraded.query_row("SELECT video_id FROM video_tags WHERE tag_id=5", [], |row| row.get::<_, i64>(0)).unwrap(), 7);
         assert_eq!(upgraded.query_row("SELECT image_name FROM previews", [], |row| row.get::<_, String>(0)).unwrap(), "cached.png");
         assert_eq!(fixture.backups().len(), 1);
@@ -254,10 +258,10 @@ pub(crate) mod tests {
             INSERT INTO tags(id,name,normalized_name) VALUES (2,'Keep','keep');
             INSERT INTO video_tags VALUES (9,2);
             DROP INDEX media_creation_date; ALTER TABLE videos DROP COLUMN created_at; DROP INDEX media_kind_active_path; ALTER TABLE videos DROP COLUMN media_kind;
-            UPDATE catalog_schema SET version=3;").unwrap();
+            ALTER TABLE videos DROP COLUMN rating; UPDATE catalog_schema SET version=3;").unwrap();
         drop(connection);
         let migrated = open_at(&fixture.path).unwrap();
-        assert_eq!(catalog_version(&migrated).unwrap(), 5);
+        assert_eq!(catalog_version(&migrated).unwrap(), 6);
         assert_eq!(migrated.query_row("SELECT media_kind FROM videos WHERE id=9", [], |row| row.get::<_, String>(0)).unwrap(), "video");
         assert_eq!(migrated.query_row("SELECT video_id FROM video_tags WHERE tag_id=2", [], |row| row.get::<_, i64>(0)).unwrap(), 9);
         assert_eq!(fixture.backups().len(), 1);
@@ -269,13 +273,33 @@ pub(crate) mod tests {
         connection.execute_batch("INSERT INTO videos(id,path,parent_path,name,size,modified_ns,status,last_seen_at,media_kind) VALUES (8,'photo.jpg','.','photo.jpg',1,'123','active',1,'image');
             INSERT INTO tags(id,name,normalized_name) VALUES (2,'Keep','keep'); INSERT INTO video_tags VALUES (8,2);
             DROP INDEX media_creation_date; ALTER TABLE videos DROP COLUMN created_at;
-            UPDATE catalog_schema SET version=4;").unwrap();
+            ALTER TABLE videos DROP COLUMN rating; UPDATE catalog_schema SET version=4;").unwrap();
         drop(connection);
         let migrated = open_at(&fixture.path).unwrap();
-        assert_eq!(catalog_version(&migrated).unwrap(), 5);
+        assert_eq!(catalog_version(&migrated).unwrap(), 6);
         assert_eq!(migrated.query_row("SELECT media_kind FROM videos WHERE id=8", [], |row| row.get::<_, String>(0)).unwrap(), "image");
         assert!(migrated.query_row("SELECT created_at FROM videos WHERE id=8", [], |row| row.get::<_, Option<i64>>(0)).unwrap().is_none());
         assert_eq!(migrated.query_row("SELECT video_id FROM video_tags WHERE tag_id=2", [], |row| row.get::<_, i64>(0)).unwrap(), 8);
         assert_eq!(fixture.backups().len(), 1);
     }
+    #[test]
+    fn rating_migration_preserves_catalog_and_defaults_to_unrated() {
+        let fixture = Fixture::new();
+        let connection = open_at(&fixture.path).unwrap();
+        connection.execute_batch("INSERT INTO previews VALUES ('photo.png','version','cache.png');
+            INSERT INTO videos(id,path,parent_path,name,size,modified_ns,status,last_seen_at,media_kind) VALUES (17,'photo.png','.','photo.png',1,'123','active',1,'image');
+            INSERT INTO tags VALUES (2,'Keep','keep'); INSERT INTO video_tags VALUES (17,2);
+            ALTER TABLE videos DROP COLUMN rating; UPDATE catalog_schema SET version=5;").unwrap();
+        drop(connection);
+        let upgraded = open_at(&fixture.path).unwrap();
+        assert_eq!(catalog_version(&upgraded).unwrap(), 6);
+        assert_eq!(upgraded.query_row("SELECT rating FROM videos WHERE id=17", [], |row| row.get::<_, Option<u8>>(0)).unwrap(), None);
+        assert_eq!(upgraded.query_row("SELECT video_id FROM video_tags", [], |row| row.get::<_, i64>(0)).unwrap(), 17);
+        assert_eq!(upgraded.query_row("SELECT image_name FROM previews", [], |row| row.get::<_, String>(0)).unwrap(), "cache.png");
+        assert_eq!(fixture.backups().len(), 1);
+        for value in ["0", "6", "3.5", "'bad'"] { assert!(upgraded.execute(&format!("UPDATE videos SET rating={value} WHERE id=17"), []).is_err()); }
+        drop(upgraded); let reopened = open_at(&fixture.path).unwrap();
+        assert_eq!(catalog_version(&reopened).unwrap(), 6); assert_eq!(fixture.backups().len(), 1);
+    }
+
 }

@@ -33,7 +33,7 @@ pub(crate) async fn filter_folder_videos(path: String, tag_ids: Vec<i64>, match_
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct TagVideo { video_id: i64, path: String }
+pub(crate) struct TagVideo { pub(crate) video_id: i64, pub(crate) path: String }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SelectionTag { id: i64, name: String, assigned_count: i64 }
@@ -41,8 +41,8 @@ struct SelectionTag { id: i64, name: String, assigned_count: i64 }
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TagSelection { video_count: usize, tags: Vec<SelectionTag> }
 
-fn validate_videos(connection: &Connection, root: &std::path::Path, videos: &[TagVideo]) -> Result<Vec<i64>, String> {
-    if videos.is_empty() { return Err("Select at least one video to tag.".into()); }
+pub(crate) fn validate_videos(connection: &Connection, root: &std::path::Path, videos: &[TagVideo]) -> Result<Vec<i64>, String> {
+    if videos.is_empty() { return Err("Select at least one media file.".into()); }
     let mut ids = std::collections::HashSet::new();
     let mut paths = Vec::new();
     for video in videos {
@@ -51,7 +51,7 @@ fn validate_videos(connection: &Connection, root: &std::path::Path, videos: &[Ta
         if !path.starts_with(root) || !crate::media_file(&path) { return Err("A selected file is outside the workspace or is not supported.".into()); }
         let matches: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM videos WHERE id=?1 AND path=?2 AND size=?3 AND modified_ns=?4 AND status='active')",
             params![video.video_id, observed.path, i64::try_from(observed.size).map_err(|error| error.to_string())?, observed.modified_ns], |row| row.get(0)).map_err(|error| error.to_string())?;
-        if !matches { return Err("A selected file changed or moved. Refresh the folder and select it again before editing tags.".into()); }
+        if !matches { return Err("A selected file changed or moved. Refresh the folder and select it again before changing its organization.".into()); }
         ids.insert(video.video_id); paths.push(path);
     }
     crate::catalog_operations::ensure_paths_idle(&paths)?;

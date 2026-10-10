@@ -95,7 +95,7 @@ impl Operation {
         let mut items = Vec::new();
         for (root, relative, before) in observations {
             let id = ensure_observed_on(&transaction, &before)?;
-            let tagged: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM video_tags WHERE video_id=?1)", [id], |row| row.get(0)).map_err(|error| error.to_string())?;
+            let tagged: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM video_tags WHERE video_id=?1) OR EXISTS(SELECT 1 FROM videos WHERE id=?1 AND rating IS NOT NULL)", [id], |row| row.get(0)).map_err(|error| error.to_string())?;
             let content_hash = if action == Action::Trash && tagged { Some(crate::catalog::content_hash(Path::new(&before.path))?) } else { None };
             items.push(Item { id, root, before, relative, content_hash });
         }
@@ -171,6 +171,7 @@ fn apply_on(connection: &mut Connection, completion: &Completion) -> Result<(), 
                 let kind = if crate::image_file(Path::new(&after.path)) { "image" } else { "video" };
                 transaction.execute("INSERT INTO videos(path,parent_path,name,size,modified_ns,status,last_seen_at,media_kind,created_at) VALUES (?1,?2,?3,?4,?5,'active',unixepoch()*1000,?6,?7)", params![after.path, parent, after.name, size, after.modified_ns, kind, crate::catalog::created_at(Path::new(&after.path))]).map_err(|error| error.to_string())?;
                 let new_id = transaction.last_insert_rowid();
+                transaction.execute("UPDATE videos SET rating=(SELECT rating FROM videos WHERE id=?2) WHERE id=?1", params![new_id, item.id]).map_err(|error| error.to_string())?;
                 transaction.execute("INSERT INTO video_tags(video_id,tag_id) SELECT ?1,tag_id FROM video_tags WHERE video_id=?2", params![new_id, item.id]).map_err(|error| error.to_string())?;
             } else {
                 transaction.execute("UPDATE videos SET path=?1,parent_path=?2,name=?3,size=?4,modified_ns=?5,status='active',last_seen_at=unixepoch()*1000,content_hash=CASE WHEN ?7 THEN NULL ELSE content_hash END WHERE id=?6", params![after.path, parent, after.name, size, after.modified_ns, item.id, completion.action == Action::Replace]).map_err(|error| error.to_string())?;

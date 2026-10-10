@@ -277,7 +277,7 @@ assert.equal(cutPreviewAction(3.2, 2, 3, 5, false), null) // The cut was already
 assert.equal(cutPreviewAction(0, 0, 0.5, 5, true), 'skip')
 assert.equal(cutPreviewAction(4.2, 4, 5, 5, true), 'stop')
 
-console.log('Frame navigation, cut preview, media sorting, grid navigation, and generation metadata tests passed')
+
 
 // ComfyUI PNG: SaveImage -> decode -> sampler -> CFGGuider -> ReferenceLatent -> text.
 const imageGraph = JSON.parse(await readFile(new URL('fixtures/comfy-image-generation.json', import.meta.url), 'utf8'))
@@ -295,3 +295,26 @@ const plainImageGraph = structuredClone(imageGraph)
 plainImageGraph['63'].inputs.positive = ['74', 0]
 plainImageGraph['63'].inputs.negative = ['67', 0]
 assert.deepEqual(extractGenerationMetadata(comfyProbe(plainImageGraph)).prompts, imageMetadata.prompts)
+
+const { allRatings, filterRatings, restoreRatingFilter } = await loadTypeScript('../src/mediaRatings.ts')
+const ratedEntries = [
+  { name: 'folder', path: '/media/folder', isDirectory: true, rating: null },
+  ...[null,1,2,3,4,5].map((rating, index) => ({ name: `clip${index}`, path: `/media/clip${index}.mp4`, isDirectory: false, rating })),
+]
+assert.equal(filterRatings(ratedEntries, allRatings).length, 7)
+assert.deepEqual(filterRatings(ratedEntries, { mode: 'unrated', value: 3 }).map(entry => entry.rating), [null,null])
+assert.deepEqual(filterRatings(ratedEntries, { mode: 'exactly', value: 3 }).map(entry => entry.rating), [null,3])
+assert.deepEqual(filterRatings(ratedEntries, { mode: 'atLeast', value: 3 }).map(entry => entry.rating), [null,3,4,5])
+assert.deepEqual(filterRatings(ratedEntries, { mode: 'moreThan', value: 3 }).map(entry => entry.rating), [null,4,5])
+assert.deepEqual(filterRatings(ratedEntries, { mode: 'moreThan', value: 5 }).map(entry => entry.rating), [null])
+assert.deepEqual(restoreRatingFilter('invalid'), allRatings)
+assert.deepEqual(restoreRatingFilter('{"mode":"exactly","value":6}'), allRatings)
+assert.deepEqual(restoreRatingFilter('{"mode":"unrated","value":3}'), { mode: 'unrated', value: 3 })
+// Visible-only Select all respects rating + date/type/tag filters before preparing Trash.
+const unratedVideos = folderResults(disposableMedia.map(entry => ({ ...entry, rating: entry.path.endsWith('.mp4') ? null : 4 })), { ...workflowFilters, rating: { mode: 'unrated', value: 3 }, showImages: false })
+assert.deepEqual(shownFilePaths(unratedVideos), ['/media/today.mp4'])
+const ratingTrashRequest = prepareTrash({ ...planOptions, file: unratedVideos.find(entry => !entry.isDirectory), entries: unratedVideos, selectedPaths: shownFilePaths(unratedVideos), rating: { mode: 'unrated', value: 3 } })
+assert.deepEqual(ratingTrashRequest.paths, ['/media/today.mp4'])
+assert.equal(ratingTrashRequest.filter.rating.mode, 'unrated')
+
+console.log('Media navigation, filters, ratings, Trash workflow, and generation metadata tests passed')

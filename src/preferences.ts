@@ -8,7 +8,7 @@ const keys = [
   'framewise.gridSize',
   'framewise.showVideos',
   'framewise.showImages',
-  'framewise.dateFilter',
+  'framewise.dateFilter', 'framewise.ratingFilter',
   'framewise.mediaSort',
   'framewise.sortDirection',
   'framewise.workspaceCollapsed',

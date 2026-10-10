@@ -3,7 +3,7 @@ use crate::media_filters::DateRange;
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct TrashFilter { expected_root: String, date: DateRange, show_videos: bool, show_images: bool }
+pub(crate) struct TrashFilter { expected_root: String, date: DateRange, show_videos: bool, show_images: bool, #[serde(default)] rating: crate::ratings::RatingFilter }
 pub(crate) struct ValidatedBatch { files: Vec<PathBuf> }
 pub(crate) struct TrashOutcome { pub moved: Vec<PathBuf>, pub remaining_paths: Vec<String>, pub error: Option<String> }
 
@@ -26,6 +26,7 @@ pub(crate) fn validate(root: &Path, paths: Vec<String>, filter: Option<&TrashFil
         }
         if seen.insert(resolved.clone()) { files.push(resolved); }
     }
+    if let Some(filter) = filter && !matches!(filter.rating.mode, crate::ratings::RatingMode::All) { crate::database::with_connection(|connection| crate::ratings::validate_filter_paths_on(connection, &files, &filter.rating))?; }
     Ok(ValidatedBatch { files })
 }
 impl ValidatedBatch {
@@ -53,7 +54,7 @@ mod tests {
             fs::write(path, b"disposable test image").unwrap();
             fs::File::options().write(true).open(path).unwrap().set_modified(UNIX_EPOCH + std::time::Duration::from_millis(ms)).unwrap();
         }
-        let filter = TrashFilter { expected_root: root.to_string_lossy().into_owned(), date: DateRange { field: "modified".into(), from: Some(start as i64), to: Some((start + 86_400_000) as i64) }, show_images: true, show_videos: true };
+        let filter = TrashFilter { expected_root: root.to_string_lossy().into_owned(), date: DateRange { field: "modified".into(), from: Some(start as i64), to: Some((start + 86_400_000) as i64) }, show_images: true, show_videos: true, rating: crate::ratings::RatingFilter::default() };
         assert!(validate(&root, vec![today.to_string_lossy().into_owned(), yesterday.to_string_lossy().into_owned()], Some(&filter)).is_err());
         assert!(today.exists() && yesterday.exists());
         let batch = validate(&root, vec![today.to_string_lossy().into_owned()], Some(&filter)).unwrap();

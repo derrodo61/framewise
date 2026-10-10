@@ -1,0 +1,17 @@
+.rating-filter { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:12px 0; font-size:12px; color:#526780; }
+.rating-filter label { display:flex; align-items:center; gap:7px; }
+.rating-filter select,.rating-filter button,.rating-clear { border:1px solid #d6dfec; border-radius:6px; padding:6px 8px; background:#fff; color:#354358; font:inherit; }
+.rating-filter button,.rating-clear { cursor:pointer; }
+.rating-controls { display:flex; align-items:center; flex-wrap:wrap; gap:3px; margin:8px 0 14px; }
+.rating-star { background:transparent; border:0; color:#aab5c4; font-size:25px; line-height:1; padding:4px; cursor:pointer; }
+.rating-star.filled,.file-rating { color:#b47704; }
+.rating-star:hover:not(:disabled) { color:#b47704; }
+.rating-status { font-size:11px; color:#7b899d; margin:0 5px; }
+.rating-clear { font-size:11px; margin-left:auto; }
+.rating-controls button:disabled { opacity:.5; cursor:default; }
+.file-rating { flex-shrink:0; font-size:12px; letter-spacing:1px; }
+.rating-sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+.rating-controls button:focus-visible { outline:2px solid #2563eb; outline-offset:2px; }
+[data-theme='dark'] .rating-filter select,[data-theme='dark'] .rating-filter button,[data-theme='dark'] .rating-clear { background:#151d29; border-color:#435169; color:#d9e5f5; }
+[data-theme='dark'] .rating-filter,[data-theme='dark'] .rating-status { color:#a9b8ce; }
+[data-theme='dark'] .rating-star.filled,[data-theme='dark'] .rating-star:hover:not(:disabled),[data-theme='dark'] .file-rating { color:#f5c45b; }

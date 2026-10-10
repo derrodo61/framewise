@@ -13,6 +13,7 @@ const SETTINGS_KEYS: &[&str] = &[
     "framewise.showVideos",
     "framewise.showImages",
     "framewise.dateFilter",
+    "framewise.ratingFilter",
     "framewise.mediaSort",
     "framewise.sortDirection",
     "framewise.workspaceCollapsed",
