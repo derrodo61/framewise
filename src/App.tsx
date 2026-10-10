@@ -19,6 +19,10 @@ import type { NamedTagVideo } from './VideoTags'
 import MediaThumbnail from './MediaThumbnail'
 import ImagePreview from './ImagePreview'
 import { isImage, filterMediaTypes } from './mediaTypes'
+import DateFilter from './DateFilter'
+import { dateBounds, emptyDateFilter, filterMediaDates } from './mediaDates'
+import type { DateFilterState } from './mediaDates'
+import { useLocalDay } from './useLocalDay'
 import { generateThumbnail } from './thumbnailQueue'
 import { nextMediaIndex } from './mediaNavigation'
 import { sortMedia } from './mediaSort'
@@ -35,7 +39,7 @@ import './preview.css'
 import './file-actions.css'
 import './media-view.css'
 
-type FileEntry = { name: string; path: string; isDirectory: boolean; size: number | null; modifiedAt: number | null; videoId?: number | null }
+type FileEntry = { name: string; path: string; isDirectory: boolean; size: number | null; modifiedAt: number | null; createdAt?: number | null; videoId?: number | null }
 type DirectoryListing = { path: string; parent: string | null; entries: FileEntry[]; catalogWarning?: string }
 type TrashBatchResult = { listing: DirectoryListing; movedCount: number; error: string | null }
 type DuplicateResult = { listing: DirectoryListing; duplicatedPath: string }
@@ -228,7 +232,11 @@ function App() {
   const [listing, setListing] = useState<DirectoryListing | null>(null)
   const [showVideos, setShowVideos] = useState(() => getPreference('framewise.showVideos') !== 'false')
   const [showImages, setShowImages] = useState(() => getPreference('framewise.showImages') !== 'false')
-  const sortedMediaEntries = useMemo(() => filterMediaTypes(sortMedia(listing?.entries ?? [], mediaSort, sortDirection), showVideos, showImages), [listing, mediaSort, sortDirection, showVideos, showImages])
+  const [dateScope, setDateScope] = useState({ root, value: emptyDateFilter })
+  if (dateScope.root !== root) setDateScope({ root, value: emptyDateFilter })
+  const localDay = useLocalDay()
+  const dates = useMemo(() => dateBounds(dateScope.value, localDay), [dateScope.value, localDay])
+  const sortedMediaEntries = useMemo(() => filterMediaDates(filterMediaTypes(sortMedia(listing?.entries ?? [], mediaSort, sortDirection), showVideos, showImages), dates), [listing, mediaSort, sortDirection, showVideos, showImages, dates])
   const [selected, setSelected] = useState<FileEntry | null>(null)
   const [playbackRequest, setPlaybackRequest] = useState<{ path: string; action: 'play' | 'toggle' } | null>(null)
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
@@ -258,7 +266,7 @@ function App() {
   if (searchScope.root !== root) setSearchScope({ root, workspace: false })
   const workspace = searchScope.root === root && searchScope.workspace
   const tagFilter = useTagFilter(listing, root, tagRevision, view, !workspace)
-  const workspaceSearch = useWorkspaceSearch(root, workspace && view === 'media', tagFilter.ids, tagFilter.matchAll, mediaSort, sortDirection === 'desc', tagRevision, listing, showVideos, showImages)
+  const workspaceSearch = useWorkspaceSearch(root, workspace && view === 'media', tagFilter.ids, tagFilter.matchAll, mediaSort, sortDirection === 'desc', tagRevision, listing, showVideos, showImages, dates)
   const resultsReady = workspace ? workspaceSearch.ready : tagFilter.ready
   const scanRunning = workspace && workspaceSearch.scan?.status === 'running'
   const mediaEntries = useMemo(() => workspace ? workspaceSearch.entries : filterMedia(sortedMediaEntries, tagFilter.active, tagFilter.matches), [workspace, workspaceSearch.entries, sortedMediaEntries, tagFilter.active, tagFilter.matches])
@@ -520,6 +528,11 @@ function App() {
     setShowVideos(videos); setShowImages(images)
     setPreference('framewise.showVideos', String(videos)); setPreference('framewise.showImages', String(images))
   }
+  function changeDates(value: DateFilterState) {
+    changeTagFilters(tagFilter.ids, tagFilter.matchAll)
+    pendingFocus.current = null
+    setDateScope({ root, value })
+  }
   function changeSearchPage(page: number) {
     changeTagFilters(tagFilter.ids, tagFilter.matchAll)
     workspaceSearch.setPage(page)
@@ -542,7 +555,7 @@ function App() {
 
   function inspectFocusedVideo(directory: DirectoryListing, focusTarget: { path?: string }) {
     if (tagFilter.active) return
-    const entries = filterMediaTypes(sortMedia(directory.entries, mediaSort, sortDirection), showVideos, showImages)
+    const entries = filterMediaDates(filterMediaTypes(sortMedia(directory.entries, mediaSort, sortDirection), showVideos, showImages), dates)
     const entry = focusTarget.path
       ? entries.find(item => item.path === focusTarget.path)
       : entries[0]
@@ -804,7 +817,7 @@ function App() {
       const oldIndex = mediaEntries.findIndex(entry => entry.path === file.path)
       const nextEntries = workspace
         ? mediaEntries.filter(entry => parentPath(entry.path) !== next.path || next.entries.some(remaining => remaining.path === entry.path))
-        : filterMedia(filterMediaTypes(sortMedia(next.entries, mediaSort, sortDirection), showVideos, showImages), tagFilter.active, tagFilter.matches)
+        : filterMedia(filterMediaDates(filterMediaTypes(sortMedia(next.entries, mediaSort, sortDirection), showVideos, showImages), dates), tagFilter.active, tagFilter.matches)
       const remaining = result.error ? nextEntries.filter(entry => paths.includes(entry.path)) : []
       const nearby = remaining[0] ?? nextEntries[Math.min(Math.max(oldIndex, 0), nextEntries.length - 1)]
       pendingFocus.current = nearby ? { path: nearby.path } : null
@@ -1023,6 +1036,7 @@ function App() {
           <div className="breadcrumb"><button onClick={() => root && browse(root, {})}>{root?.split(/[\\/]/).filter(Boolean).at(-1) || 'Root'}</button>{listing.path !== root && <><Icon name="chevron" size={14} /><span>{pathParts.at(-1)}</span></>}</div>
           <TagFilter filter={tagFilter} count={workspace ? workspaceSearch.total : videoCount} total={totalVideoCount} onChange={changeTagFilters} workspace={workspace} onScopeChange={changeSearchScope} ready={resultsReady} />
           <div className="media-type-filters" role="group" aria-label="Media types"><label><input type="checkbox" checked={showVideos} onChange={event => changeMediaTypes(event.target.checked, showImages)} /> Videos</label><label><input type="checkbox" checked={showImages} onChange={event => changeMediaTypes(showVideos, event.target.checked)} /> Images</label></div>
+          <DateFilter value={dateScope.value} error={dates.error} onChange={changeDates} />
           {workspace && <div className="workspace-discovery">
             <div className="workspace-scan-actions"><span role="status">{scanRunning ? 'Scanning workspace…' : workspaceSearch.scan?.status === 'complete' ? 'Scan complete' : workspaceSearch.scan?.status === 'cancelled' ? 'Scan cancelled — results may be incomplete' : 'Workspace catalog'} · {workspaceSearch.scan?.folders ?? 0} folders · {workspaceSearch.scan?.videos ?? 0} files discovered</span><button onClick={scanRunning ? workspaceSearch.cancel : workspaceSearch.rescan}>{scanRunning ? 'Cancel scan' : 'Scan workspace'}</button></div>
             {scanRunning && <><progress aria-label="Scanning workspace" /><p title={displayPath(workspaceSearch.scan!.currentFolder)}>{displayPath(workspaceSearch.scan!.currentFolder)}</p><p>File changes and tag assignments are available when scanning finishes.</p></>}
@@ -1070,6 +1084,7 @@ function App() {
         {!inspectorCollapsed && (selected && resultsReady && mediaEntries.some(entry => entry.path === selected.path) ? <div key={selected.path} className="details-body">
           {selectedImage ? <ImagePreview path={selected.path} revision={selected} /> : <VideoPreview file={selected} playbackAction={playbackRequest?.path === selected.path ? playbackRequest.action : null} onPlayRequestHandled={() => setPlaybackRequest(null)} />}
           <div className="selected-file"><span className="selected-file-icon"><Icon name={selectedImage ? 'image' : 'film'} size={27} /></span><div><strong title={selected.name}>{selected.name}</strong><span>{fileSize(selected.size)}</span></div></div>
+          <dl className="property-list"><Property label="Modified" value={selected.modifiedAt === null ? 'Unavailable' : new Date(selected.modifiedAt).toLocaleString()} /><Property label="Created" value={selected.createdAt == null ? 'Unavailable' : new Date(selected.createdAt).toLocaleString()} /></dl>
           {probe && video && !selectedImage && <button className="inspector-edit" disabled={scanRunning} onClick={() => editFile(selected)}>Edit video</button>}
           <section aria-label="Media tags"><div className="section-title">TAGS</div>{selected.videoId
             ? <VideoTags key={`${selected.path}:${selected.videoId}`} videos={[{ videoId: selected.videoId, path: selected.path }]} refreshToken={tagRevision} onChanged={() => setTagRevision(value => value + 1)} />

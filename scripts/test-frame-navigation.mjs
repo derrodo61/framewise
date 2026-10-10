@@ -15,6 +15,37 @@ const { cutPreviewAction } = await loadTypeScript('../src/cutPreview.ts')
 const { nextMediaIndex } = await loadTypeScript('../src/mediaNavigation.ts')
 const { sortMedia } = await loadTypeScript('../src/mediaSort.ts')
 const { isImage, filterMediaTypes } = await loadTypeScript('../src/mediaTypes.ts')
+const { dateBounds, emptyDateFilter, filterMediaDates } = await loadTypeScript('../src/mediaDates.ts')
+const testNow = new Date(2026, 9, 10, 12)
+const todayBounds = dateBounds({ ...emptyDateFilter, preset: 'today' }, testNow)
+assert.equal(todayBounds.from, new Date(2026, 9, 10).getTime())
+assert.equal(todayBounds.to, new Date(2026, 9, 11).getTime())
+assert.equal(dateBounds({ ...emptyDateFilter, preset: 'yesterday' }, testNow).from, new Date(2026, 9, 9).getTime())
+assert.equal(dateBounds({ ...emptyDateFilter, preset: '7' }, testNow).from, new Date(2026, 9, 4).getTime())
+assert.equal(dateBounds({ ...emptyDateFilter, preset: '30' }, testNow).from, new Date(2026, 8, 11).getTime())
+const customDay = dateBounds({ ...emptyDateFilter, preset: 'custom', from: '2026-10-10', to: '2026-10-10' })
+assert.deepEqual(customDay, todayBounds)
+assert.ok(dateBounds({ ...emptyDateFilter, preset: 'custom', from: '2026-10-11', to: '2026-10-10' }).error)
+assert.ok(dateBounds({ ...emptyDateFilter, preset: 'custom', from: '2026-02-30', to: '' }).error)
+const datedEntries = [
+  { isDirectory: true, modifiedAt: null, createdAt: null },
+  { isDirectory: false, modifiedAt: todayBounds.from, createdAt: null },
+  { isDirectory: false, modifiedAt: todayBounds.to - 1, createdAt: todayBounds.from },
+  { isDirectory: false, modifiedAt: todayBounds.to, createdAt: todayBounds.to },
+]
+assert.equal(filterMediaDates(datedEntries, todayBounds).length, 3)
+assert.equal(filterMediaDates(datedEntries, { ...todayBounds, field: 'created' }).length, 2)
+assert.equal(filterMediaDates(datedEntries, dateBounds(emptyDateFilter)).length, 4)
+assert.equal(dateBounds({ ...emptyDateFilter, preset: 'custom', from: '2026-10-10', to: '' }).to, null)
+// Use a DST timezone to check whole local days rather than fixed 24-hour offsets.
+const originalTZ = process.env.TZ
+process.env.TZ = 'Europe/Berlin'
+const shortDay = dateBounds({ ...emptyDateFilter, preset: 'custom', from: '2026-03-29', to: '2026-03-29' })
+const longDay = dateBounds({ ...emptyDateFilter, preset: 'custom', from: '2026-10-25', to: '2026-10-25' })
+assert.equal(shortDay.to - shortDay.from, 23 * 60 * 60 * 1000)
+assert.equal(longDay.to - longDay.from, 25 * 60 * 60 * 1000)
+if (originalTZ === undefined) delete process.env.TZ
+else process.env.TZ = originalTZ
 assert.equal(isImage('C:\\pictures\\PHOTO.JPEG'), true)
 assert.equal(isImage('/pictures/photo.webp'), true)
 assert.equal(isImage('/pictures/photo.png'), true)

@@ -26,6 +26,7 @@ struct FileEntry {
     is_directory: bool,
     size: Option<u64>,
     modified_at: Option<u64>,
+    created_at: Option<u64>,
     video_id: Option<i64>,
     #[serde(skip)]
     modified_ns: Option<String>,
@@ -126,6 +127,8 @@ fn list_folder(path: &Path, root: &Path) -> Result<DirectoryListing, String> {
             modified_ns: metadata.as_ref().and_then(|metadata| metadata.modified().ok())
                 .and_then(|time| time.duration_since(UNIX_EPOCH).ok()).map(|duration| duration.as_nanos().to_string()),
             size: if file_type.is_file() { metadata.as_ref().map(|metadata| metadata.len()) } else { None },
+            created_at: metadata.as_ref().and_then(|metadata| metadata.created().ok())
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok()).and_then(|duration| u64::try_from(duration.as_millis()).ok()),
             modified_at: metadata.and_then(|metadata| metadata.modified().ok())
                 .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
                 .and_then(|duration| u64::try_from(duration.as_millis()).ok()),

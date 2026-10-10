@@ -1,0 +1,11 @@
+.date-filter { margin: 12px 0; padding: 12px; border: 1px solid #dfe6ef; border-radius: 8px; font-size: 12px; color: #596b84; }
+.date-filter-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.date-filter label { display: flex; align-items: center; gap: 6px; }
+.date-filter input, .date-filter select, .date-filter button { min-width: 0; padding: 7px 8px; border: 1px solid #d6dfec; border-radius: 6px; background: #fff; color: #354358; font: inherit; }
+.date-filter button { cursor: pointer; }
+.date-filter button:disabled { opacity: .5; cursor: default; }
+.date-filter p { margin-top: 8px; font-size: 11px; line-height: 1.5; }
+.date-filter .date-filter-error { color: #a43f45; }
+[data-theme='dark'] .date-filter { color: #a9b8ce; border-color: #435169; }
+[data-theme='dark'] .date-filter input, [data-theme='dark'] .date-filter select, [data-theme='dark'] .date-filter button { background: #151d29; color: #d9e5f5; border-color: #435169; color-scheme: dark; }
+[data-theme='dark'] .date-filter .date-filter-error { color: #ffb9c4; }
