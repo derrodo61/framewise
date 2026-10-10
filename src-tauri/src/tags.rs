@@ -48,10 +48,10 @@ fn validate_videos(connection: &Connection, root: &std::path::Path, videos: &[Ta
     for video in videos {
         let observed = crate::catalog::observe(std::path::Path::new(&video.path))?;
         let path = std::path::PathBuf::from(&observed.path);
-        if !path.starts_with(root) || !crate::video_file(&path) { return Err("A selected video is outside the workspace or is not supported.".into()); }
+        if !path.starts_with(root) || !crate::media_file(&path) { return Err("A selected file is outside the workspace or is not supported.".into()); }
         let matches: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM videos WHERE id=?1 AND path=?2 AND size=?3 AND modified_ns=?4 AND status='active')",
             params![video.video_id, observed.path, i64::try_from(observed.size).map_err(|error| error.to_string())?, observed.modified_ns], |row| row.get(0)).map_err(|error| error.to_string())?;
-        if !matches { return Err("A selected video changed or moved. Refresh the folder and select it again before editing tags.".into()); }
+        if !matches { return Err("A selected file changed or moved. Refresh the folder and select it again before editing tags.".into()); }
         ids.insert(video.video_id); paths.push(path);
     }
     crate::catalog_operations::ensure_paths_idle(&paths)?;
@@ -248,6 +248,16 @@ mod tests {
         TagVideo { video_id: id, path: video.path }
     }
     fn assigned(result: &TagSelection, name: &str) -> i64 { result.tags.iter().find(|tag| tag.name == name).unwrap().assigned_count }
+    #[test]
+    fn mixed_images_and_videos_accept_shared_tag_assignments() {
+        let fixture = Fixture::new();
+        let root = fixture.folder.canonicalize().unwrap();
+        let mut connection = open_at(&fixture.path).unwrap();
+        let targets = [seed_video(&connection, &fixture, "photo.jpeg"), seed_video(&connection, &fixture, "clip.mp4")];
+        let result = assignment_on(&mut connection, &root, &targets, Assignment::Create { name: "Shared".into() }).unwrap();
+        assert_eq!(assigned(&result, "Shared"), 2);
+        assert_eq!(connection.query_row("SELECT media_kind FROM videos WHERE id=?1", [targets[0].video_id], |row| row.get::<_, String>(0)).unwrap(), "image");
+    }
 
     #[test]
     fn adding_multiple_tags_is_atomic_idempotent_and_scoped() {

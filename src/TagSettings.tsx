@@ -54,7 +54,7 @@ export default function TagSettings() {
     if (busy || loading) return
     setBusy(true); setError(null); setNotice(null)
     try {
-      const approved = await ask(`Delete tag “${tag.name}”? This removes the tag from ${tag.videoCount} ${tag.videoCount === 1 ? 'video' : 'videos'} across your collection, including missing or trashed videos. Your video files will not be deleted.`, { title: 'Delete tag', kind: 'warning', okLabel: 'Delete tag', cancelLabel: 'Cancel' })
+      const approved = await ask(`Delete tag “${tag.name}”? This removes the tag from ${tag.videoCount} ${tag.videoCount === 1 ? 'file' : 'files'} across your collection, including missing or trashed files. Your media files will not be deleted.`, { title: 'Delete tag', kind: 'warning', okLabel: 'Delete tag', cancelLabel: 'Cancel' })
       if (!approved) return
       await invoke('delete_tag', { tagId: tag.id, expectedName: tag.name, expectedVideoCount: tag.videoCount })
       setNotice(`Deleted tag “${tag.name}”.`); setEditingId(null); refresh()
@@ -76,7 +76,7 @@ export default function TagSettings() {
     <ul className="tag-list" aria-label="Tags" aria-busy={loading || busy}>
       {tags.map(tag => <li key={tag.id}>
         {editingId === tag.id ? <form className="tag-rename" onSubmit={event => { event.preventDefault(); void rename(tag) }} onKeyDown={event => { if (event.key === 'Escape' && !busy) setEditingId(null) }}><label className="tag-rename-label" htmlFor={`rename-tag-${tag.id}`}>Rename “{tag.name}”</label><div className="tag-input-actions"><input id={`rename-tag-${tag.id}`} autoFocus value={renameName} onChange={event => setRenameName(event.target.value)} disabled={busy} /><button type="submit" disabled={busy || loading || !renameName.trim()}>Save</button><button type="button" onClick={() => setEditingId(null)} disabled={busy}>Cancel</button></div></form>
-          : <><div className="tag-summary"><strong>{tag.name}</strong><span>{tag.videoCount} {tag.videoCount === 1 ? 'video' : 'videos'}</span></div><div className="tag-row-actions"><button onClick={() => { setEditingId(tag.id); setRenameName(tag.name); setError(null); setNotice(null) }} disabled={busy || loading} aria-label={`Rename tag ${tag.name}`}>Rename</button><button className="tag-delete" onClick={() => void remove(tag)} disabled={busy || loading} aria-label={`Delete tag ${tag.name}`}>Delete</button></div></>}
+          : <><div className="tag-summary"><strong>{tag.name}</strong><span>{tag.videoCount} {tag.videoCount === 1 ? 'file' : 'files'}</span></div><div className="tag-row-actions"><button onClick={() => { setEditingId(tag.id); setRenameName(tag.name); setError(null); setNotice(null) }} disabled={busy || loading} aria-label={`Rename tag ${tag.name}`}>Rename</button><button className="tag-delete" onClick={() => void remove(tag)} disabled={busy || loading} aria-label={`Delete tag ${tag.name}`}>Delete</button></div></>}
       </li>)}
     </ul>
     {!loading && !error && tags.length === 0 && <p className="tag-empty">{query.trim() ? 'No tags match your search.' : 'No tags yet. Create your first tag above.'}</p>}

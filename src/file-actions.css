@@ -107,3 +107,6 @@
 [data-theme='dark'] .browser-create-folder { border-color: #303c4e; background: #1b2432; }
 [data-theme='dark'] .browser-create-folder input,[data-theme='dark'] .browser-create-folder button { border-color: #3a485c; background: #202d3e; color: #c8d5e6; }
 [data-theme='dark'] .browser-create-folder button[type='submit'] { border-color: #2563eb; background: #2563eb; color: #fff; }
+.browser-toolbar { height: auto; min-height: 49px; flex-wrap: wrap; gap: 8px; padding-top: 8px; padding-bottom: 8px; }
+.browser-toolbar-actions { flex-wrap: wrap; }
+.browser-toolbar .selection-action { display: inline-flex; font-size: 11px; white-space: nowrap; }

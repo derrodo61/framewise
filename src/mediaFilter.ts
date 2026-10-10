@@ -1,4 +1,7 @@
 type Entry = { path: string; isDirectory: boolean; videoId?: number | null }
+export function shownFilePaths(entries: readonly Entry[]): string[] {
+  return entries.filter(entry => !entry.isDirectory).map(entry => entry.path)
+}
 export function parentPath(path: string): string {
   const index = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
   const parent = path.slice(0, index)

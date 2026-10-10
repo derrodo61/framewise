@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{AppState, DirectoryListing, relocate_folder_previews, relocate_video_preview, selected_root, thumbnail_name, video_file, within_root};
+use crate::{AppState, DirectoryListing, relocate_folder_previews, relocate_video_preview, selected_root, thumbnail_name, media_file, within_root};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -111,15 +111,15 @@ pub(crate) async fn rename_video(
         .map_err(|error| format!("Cannot open video: {error}"))?
         .file_type();
     if !file_type.is_file() {
-        return Err("Select a regular video file".into());
+        return Err("Select a regular media file".into());
     }
     let root = selected_root(&state)?;
     let source = within_root(&path, &state)?;
-    if !video_file(&source) {
-        return Err("Select a supported video file".into());
+    if !media_file(&source) {
+        return Err("Select a supported media file".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        if !valid_stem(&new_stem) { return Err("Choose a valid video name.".into()); }
+        if !valid_stem(&new_stem) { return Err("Choose a valid file name.".into()); }
         let target = source.with_file_name(format!("{new_stem}.{}", source.extension().ok_or("Cannot read extension")?.to_string_lossy()));
         let operation = crate::catalog_operations::Operation::begin(crate::catalog_operations::Action::Move, vec![source.clone()], vec![Some(target)])?;
         let legacy_name = thumbnail_name(&source);

@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{AppState, DirectoryListing, selected_root, video_file, within_root};
+use crate::{AppState, DirectoryListing, selected_root, media_file, within_root};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -94,12 +94,12 @@ pub(crate) async fn duplicate_video(
         .map_err(|error| format!("Cannot open video: {error}"))?
         .file_type();
     if !file_type.is_file() {
-        return Err("Select a regular video file".into());
+        return Err("Select a regular media file".into());
     }
     let root = selected_root(&state)?;
     let source = within_root(&path, &state)?;
-    if !video_file(&source) {
-        return Err("Select a supported video file".into());
+    if !media_file(&source) {
+        return Err("Select a supported media file".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
         let mut operation = None;

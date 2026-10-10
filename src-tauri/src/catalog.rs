@@ -8,6 +8,9 @@ pub(crate) struct ObservedVideo {
     pub size: u64,
     pub modified_ns: String,
 }
+pub(crate) fn created_at(path: &Path) -> Option<i64> {
+    std::fs::metadata(path).ok()?.created().ok()?.duration_since(UNIX_EPOCH).ok()?.as_millis().try_into().ok()
+}
 
 pub(crate) fn observe(path: &Path) -> Result<ObservedVideo, String> {
     let metadata = std::fs::symlink_metadata(path).map_err(|error| format!("Cannot read {}: {error}", path.display()))?;
@@ -38,7 +41,10 @@ pub(crate) fn ensure_observed_on(connection: &Connection, video: &ObservedVideo)
     let known: Option<(i64, i64, String)> = connection.query_row("SELECT id,size,modified_ns FROM videos WHERE path=?1 AND status='active'", [&video.path], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
         .optional().map_err(|error| error.to_string())?;
     if let Some((id, old_size, modified)) = &known
-        && *old_size == size && modified == &video.modified_ns { return Ok(*id); }
+        && *old_size == size && modified == &video.modified_ns {
+        connection.execute("UPDATE videos SET created_at=?1 WHERE id=?2", params![created_at(Path::new(&video.path)), id]).map_err(|error| error.to_string())?;
+        return Ok(*id);
+    }
     if let Some((id, _, _)) = known { connection.execute("UPDATE videos SET status='changed' WHERE id=?1", [id]).map_err(|error| error.to_string())?; }
     let candidates = {
         let mut statement = connection.prepare("SELECT id,content_hash FROM videos WHERE path=?1 AND size=?2 AND status='trashed' AND content_hash IS NOT NULL").map_err(|error| error.to_string())?;
@@ -50,12 +56,13 @@ pub(crate) fn ensure_observed_on(connection: &Connection, video: &ObservedVideo)
         let matches: Vec<_> = candidates.iter().filter(|(_, candidate)| *candidate == hash).collect();
         if matches.len() == 1 {
             let id = matches[0].0;
-            connection.execute("UPDATE videos SET status='active',modified_ns=?1,last_seen_at=unixepoch()*1000 WHERE id=?2", params![video.modified_ns, id]).map_err(|error| error.to_string())?;
+            connection.execute("UPDATE videos SET status='active',modified_ns=?1,last_seen_at=unixepoch()*1000,created_at=?3 WHERE id=?2", params![video.modified_ns, id, created_at(Path::new(&video.path))]).map_err(|error| error.to_string())?;
             return Ok(id);
         }
     }
     let parent = Path::new(&video.path).parent().ok_or("Cannot read parent folder")?.to_string_lossy();
-    connection.execute("INSERT INTO videos(path,parent_path,name,size,modified_ns,status,last_seen_at) VALUES (?1,?2,?3,?4,?5,'active',unixepoch()*1000)", params![video.path, parent, video.name, size, video.modified_ns]).map_err(|error| error.to_string())?;
+    let kind = if crate::image_file(Path::new(&video.path)) { "image" } else { "video" };
+    connection.execute("INSERT INTO videos(path,parent_path,name,size,modified_ns,status,last_seen_at,media_kind,created_at) VALUES (?1,?2,?3,?4,?5,'active',unixepoch()*1000,?6,?7)", params![video.path, parent, video.name, size, video.modified_ns, kind, created_at(Path::new(&video.path))]).map_err(|error| error.to_string())?;
     Ok(connection.last_insert_rowid())
 }
 

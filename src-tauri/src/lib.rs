@@ -12,6 +12,8 @@ mod catalog;
 mod catalog_operations;
 mod tags;
 mod workspace_search;
+mod media_filters;
+mod trash_media;
 #[cfg(desktop)]
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
@@ -26,6 +28,7 @@ struct FileEntry {
     is_directory: bool,
     size: Option<u64>,
     modified_at: Option<u64>,
+    created_at: Option<u64>,
     video_id: Option<i64>,
     #[serde(skip)]
     modified_ns: Option<String>,
@@ -47,6 +50,7 @@ struct TrashBatchResult {
     listing: DirectoryListing,
     moved_count: usize,
     error: Option<String>,
+    remaining_paths: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -65,6 +69,22 @@ fn video_file(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| VIDEO_EXTENSIONS.iter().any(|item| item.eq_ignore_ascii_case(extension)))
+}
+fn image_file(path: &Path) -> bool {
+    path.extension().and_then(|extension| extension.to_str())
+        .is_some_and(|extension| ["jpg", "jpeg", "png", "webp"].iter().any(|item| item.eq_ignore_ascii_case(extension)))
+}
+fn media_file(path: &Path) -> bool { video_file(path) || image_file(path) }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImagePreview { image_path: String, version: String }
+#[tauri::command]
+fn prepare_image_preview(path: String, state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<ImagePreview, String> {
+    let image = within_root(&path, &state)?;
+    if !image.is_file() || !image_file(&image) { return Err("Select a supported image file".into()); }
+    app.asset_protocol_scope().allow_file(&image).map_err(|error| error.to_string())?;
+    Ok(ImagePreview { version: editor::signature(&image)?, image_path: image.to_string_lossy().into_owned() })
 }
 
 fn selected_root(state: &AppState) -> Result<PathBuf, String> {
@@ -97,7 +117,7 @@ fn list_folder(path: &Path, root: &Path) -> Result<DirectoryListing, String> {
         let item = item.map_err(|error| format!("Cannot read folder entry: {error}"))?;
         let file_type = item.file_type().map_err(|error| format!("Cannot read file type: {error}"))?;
         // Avoid following links outside the selected folder.
-        if file_type.is_symlink() || !(file_type.is_dir() || (file_type.is_file() && video_file(&item.path()))) {
+        if file_type.is_symlink() || !(file_type.is_dir() || (file_type.is_file() && media_file(&item.path()))) {
             continue;
         }
         let path = item.path();
@@ -110,6 +130,8 @@ fn list_folder(path: &Path, root: &Path) -> Result<DirectoryListing, String> {
             modified_ns: metadata.as_ref().and_then(|metadata| metadata.modified().ok())
                 .and_then(|time| time.duration_since(UNIX_EPOCH).ok()).map(|duration| duration.as_nanos().to_string()),
             size: if file_type.is_file() { metadata.as_ref().map(|metadata| metadata.len()) } else { None },
+            created_at: metadata.as_ref().and_then(|metadata| metadata.created().ok())
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok()).and_then(|duration| u64::try_from(duration.as_millis()).ok()),
             modified_at: metadata.and_then(|metadata| metadata.modified().ok())
                 .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
                 .and_then(|duration| u64::try_from(duration.as_millis()).ok()),
@@ -165,52 +187,21 @@ async fn reveal_in_file_manager(path: String, state: tauri::State<'_, AppState>)
 }
 
 #[tauri::command]
-async fn move_videos_to_trash(paths: Vec<String>, state: tauri::State<'_, AppState>) -> Result<TrashBatchResult, String> {
-    if paths.is_empty() {
-        return Err("Select at least one video".into());
-    }
+async fn move_videos_to_trash(paths: Vec<String>, filter: Option<trash_media::TrashFilter>, state: tauri::State<'_, AppState>) -> Result<TrashBatchResult, String> {
     let root = selected_root(&state)?;
-    let mut files = Vec::new();
-    let mut seen = HashSet::new();
-    let mut parent: Option<PathBuf> = None;
-    for path in paths {
-        let file_type = fs::symlink_metadata(&path)
-            .map_err(|error| format!("Cannot open video: {error}"))?
-            .file_type();
-        if !file_type.is_file() {
-            return Err("Select regular video files".into());
-        }
-        let resolved = within_root(&path, &state)?;
-        if !video_file(&resolved) {
-            return Err("Select supported video files".into());
-        }
-        let folder = resolved.parent().ok_or("Cannot find the video's folder")?;
-        if parent.as_deref().is_some_and(|current| current != folder) {
-            return Err("Selected videos must be in the same folder".into());
-        }
-        parent = Some(folder.to_path_buf());
-        if seen.insert(resolved.clone()) {
-            files.push(resolved);
-        }
-    }
-    let parent = parent.ok_or("Cannot find the videos' folder")?;
     tauri::async_runtime::spawn_blocking(move || {
+        let batch = trash_media::validate(&root, paths, filter.as_ref())?;
+        let parent = batch.parent()?;
+        let files = batch.files().to_vec();
         let operation = catalog_operations::Operation::begin(catalog_operations::Action::Trash, files.clone(), vec![None; files.len()])?;
-        let preview_names: Vec<_> = files.iter().map(|file| thumbnail_name(file)).collect();
-        let mut error = trash::delete_all(&files).err().map(|cause| {
-            log::error!("Could not move every video to Trash: {cause}");
-            format!("Could not move every video to Trash: {cause}")
-        });
-        let mut moved_count = 0;
-        for (file, preview_name) in files.iter().zip(preview_names) {
-            if matches!(fs::symlink_metadata(file), Err(cause) if cause.kind() == io::ErrorKind::NotFound) {
-                moved_count += 1;
-                forget_video_preview(file, preview_name.as_deref());
-            }
-        }
+        let previews: Vec<_> = files.iter().map(|file| (file.clone(), thumbnail_name(file))).collect();
+        let outcome = batch.execute(|files| trash::delete_all(files).map_err(|cause| format!("Could not move every file to Trash: {cause}")));
+        let mut error = outcome.error;
+        if let Some(error) = &error { log::error!("{error}"); }
+        let moved: HashSet<_> = outcome.moved.iter().collect();
+        for (file, name) in previews { if moved.contains(&file) { forget_video_preview(&file, name.as_deref()); } }
         if let Err(cause) = operation.finish() { error = Some(match error { Some(original) => format!("{original} {cause}"), None => cause }); }
-        let listing = catalogued_folder(&parent, &root)?;
-        Ok(TrashBatchResult { listing, moved_count, error })
+        Ok(TrashBatchResult { listing: catalogued_folder(&parent, &root)?, moved_count: moved.len(), error, remaining_paths: outcome.remaining_paths })
     }).await.map_err(|error| format!("Trash operation failed: {error}"))?
 }
 
@@ -242,8 +233,8 @@ async fn move_folder_to_trash(path: String, state: tauri::State<'_, AppState>) -
 #[tauri::command]
 async fn inspect_video(path: String, state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
     let resolved = within_root(&path, &state)?;
-    if !resolved.is_file() || !video_file(&resolved) {
-        return Err("Select a supported video file".into());
+    if !resolved.is_file() || !media_file(&resolved) {
+        return Err("Select a supported media file".into());
     }
     tauri::async_runtime::spawn_blocking(move || inspect_video_file(&resolved))
         .await.map_err(|error| format!("Metadata task failed: {error}"))?
@@ -668,7 +659,7 @@ fn prepare_preview(path: String, state: tauri::State<'_, AppState>, app: tauri::
     let started = Instant::now();
     let video = within_root(&path, &state)?;
     if !video.is_file() || !video_file(&video) {
-        return Err("Select a supported video file".into());
+        return Err("Select a supported media file".into());
     }
     let video_version = editor::signature(&video)?;
     app.asset_protocol_scope().allow_file(&video).map_err(|error| format!("Cannot open video preview: {error}"))?;
@@ -690,7 +681,7 @@ fn prepare_preview(path: String, state: tauri::State<'_, AppState>, app: tauri::
 async fn generate_preview_thumbnail(path: String, state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<Option<String>, String> {
     let video = within_root(&path, &state)?;
     if !video.is_file() || !video_file(&video) {
-        return Err("Select a supported video file".into());
+        return Err("Select a supported media file".into());
     }
     let worker_app = app.clone();
     let thumbnail = tauri::async_runtime::spawn_blocking(move || create_thumbnail(&video, &worker_app))
@@ -749,7 +740,7 @@ pub fn run() {
         .manage(AppState::default())
         .manage(workspace_search::ScanState::default())
         .manage(move_files::MoveState::default())
-        .invoke_handler(tauri::generate_handler![select_root, list_directory, reveal_in_file_manager, move_videos_to_trash, move_folder_to_trash, duplicate::duplicate_video, rename::rename_video, rename::rename_folder, move_files::begin_move, move_files::move_session, move_files::list_move_directory, move_files::create_move_folder, move_files::create_media_folder, move_files::move_selected, preferences::load_preferences, preferences::save_preferences, tags::list_tags, tags::create_tag, tags::rename_tag, tags::delete_tag, tags::filter_folder_videos, workspace_search::start_workspace_scan, workspace_search::workspace_scan_status, workspace_search::cancel_workspace_scan, workspace_search::search_workspace, tags::selection_tags, tags::set_video_tag, tags::add_video_tags, tags::create_and_assign_tag, inspect_video, prepare_preview, generate_preview_thumbnail, preview_cache_directory, preview_index_location, editor::prepare_edit, editor::video_frame_times, editor::export::export_edit])
+        .invoke_handler(tauri::generate_handler![select_root, list_directory, reveal_in_file_manager, move_videos_to_trash, move_folder_to_trash, duplicate::duplicate_video, rename::rename_video, rename::rename_folder, move_files::begin_move, move_files::move_session, move_files::list_move_directory, move_files::create_move_folder, move_files::create_media_folder, move_files::move_selected, preferences::load_preferences, preferences::save_preferences, tags::list_tags, tags::create_tag, tags::rename_tag, tags::delete_tag, tags::filter_folder_videos, workspace_search::start_workspace_scan, workspace_search::workspace_scan_status, workspace_search::cancel_workspace_scan, workspace_search::search_workspace, tags::selection_tags, tags::set_video_tag, tags::add_video_tags, tags::create_and_assign_tag, inspect_video, prepare_image_preview, prepare_preview, generate_preview_thumbnail, preview_cache_directory, preview_index_location, editor::prepare_edit, editor::video_frame_times, editor::export::export_edit])
         .run(tauri::generate_context!())
         .expect("error while building Tauri application");
 }

@@ -2,25 +2,131 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import ts from 'typescript'
 
-async function loadTypeScript(path) {
-  const source = await readFile(new URL(path, import.meta.url), 'utf8')
-  const javascript = ts.transpileModule(source, {
+const moduleUrls = new Map()
+async function typeScriptUrl(url) {
+  if (moduleUrls.has(url.href)) return moduleUrls.get(url.href)
+  const pending = (async () => {
+  const source = await readFile(url, 'utf8')
+  let javascript = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
   }).outputText
-  return import(`data:text/javascript;base64,${Buffer.from(javascript).toString('base64')}`)
+  for (const match of [...javascript.matchAll(/from\s+(['"])(\.{1,2}\/[^'"]+)\1/g)]) {
+    const dependency = new URL(match[2].endsWith('.ts') ? match[2] : `${match[2]}.ts`, url)
+    javascript = javascript.replace(match[0], `from ${match[1]}${await typeScriptUrl(dependency)}${match[1]}`)
+  }
+  return `data:text/javascript;base64,${Buffer.from(javascript).toString('base64')}`
+  })()
+  moduleUrls.set(url.href, pending)
+  return pending
 }
+async function loadTypeScript(path) { return import(await typeScriptUrl(new URL(path, import.meta.url))) }
 
 const { adjacentFrameTime, frameIndexAt } = await loadTypeScript('../src/frameNavigation.ts')
 const { cutPreviewAction } = await loadTypeScript('../src/cutPreview.ts')
 const { nextMediaIndex } = await loadTypeScript('../src/mediaNavigation.ts')
 const { sortMedia } = await loadTypeScript('../src/mediaSort.ts')
-const { filterMedia, visibleSelection, parentPath, sameParent } = await loadTypeScript('../src/mediaFilter.ts')
+const { isImage, filterMediaTypes } = await loadTypeScript('../src/mediaTypes.ts')
+const { dateBounds, emptyDateFilter, filterMediaDates, restoreDateFilter } = await loadTypeScript('../src/mediaDates.ts')
+const savedToday = { root: 'C:\\media', value: { ...emptyDateFilter, preset: 'today' } }
+assert.deepEqual(restoreDateFilter(JSON.stringify(savedToday)), savedToday)
+assert.deepEqual(restoreDateFilter('invalid JSON').value, emptyDateFilter)
+assert.deepEqual(restoreDateFilter('{"root":"C:/media","value":{"preset":"all"}}').value, emptyDateFilter)
+const testNow = new Date(2026, 9, 10, 12)
+const todayBounds = dateBounds({ ...emptyDateFilter, preset: 'today' }, testNow)
+assert.equal(todayBounds.from, new Date(2026, 9, 10).getTime())
+assert.equal(todayBounds.to, new Date(2026, 9, 11).getTime())
+assert.equal(dateBounds({ ...emptyDateFilter, preset: 'yesterday' }, testNow).from, new Date(2026, 9, 9).getTime())
+assert.equal(dateBounds({ ...emptyDateFilter, preset: '7' }, testNow).from, new Date(2026, 9, 4).getTime())
+assert.equal(dateBounds({ ...emptyDateFilter, preset: '30' }, testNow).from, new Date(2026, 8, 11).getTime())
+const customDay = dateBounds({ ...emptyDateFilter, preset: 'custom', from: '2026-10-10', to: '2026-10-10' })
+assert.deepEqual(customDay, todayBounds)
+assert.ok(dateBounds({ ...emptyDateFilter, preset: 'custom', from: '2026-10-11', to: '2026-10-10' }).error)
+assert.ok(dateBounds({ ...emptyDateFilter, preset: 'custom', from: '2026-02-30', to: '' }).error)
+const datedEntries = [
+  { isDirectory: true, modifiedAt: null, createdAt: null },
+  { isDirectory: false, modifiedAt: todayBounds.from, createdAt: null },
+  { isDirectory: false, modifiedAt: todayBounds.to - 1, createdAt: todayBounds.from },
+  { isDirectory: false, modifiedAt: todayBounds.to, createdAt: todayBounds.to },
+]
+assert.equal(filterMediaDates(datedEntries, todayBounds).length, 3)
+assert.equal(filterMediaDates(datedEntries, { ...todayBounds, field: 'created' }).length, 2)
+assert.equal(filterMediaDates(datedEntries, dateBounds(emptyDateFilter)).length, 4)
+assert.equal(dateBounds({ ...emptyDateFilter, preset: 'custom', from: '2026-10-10', to: '' }).to, null)
+// Use a DST timezone to check whole local days rather than fixed 24-hour offsets.
+const originalTZ = process.env.TZ
+process.env.TZ = 'Europe/Berlin'
+const shortDay = dateBounds({ ...emptyDateFilter, preset: 'custom', from: '2026-03-29', to: '2026-03-29' })
+const longDay = dateBounds({ ...emptyDateFilter, preset: 'custom', from: '2026-10-25', to: '2026-10-25' })
+assert.equal(shortDay.to - shortDay.from, 23 * 60 * 60 * 1000)
+assert.equal(longDay.to - longDay.from, 25 * 60 * 60 * 1000)
+if (originalTZ === undefined) delete process.env.TZ
+else process.env.TZ = originalTZ
+assert.equal(isImage('C:\\pictures\\PHOTO.JPEG'), true)
+assert.equal(isImage('/pictures/photo.webp'), true)
+assert.equal(isImage('/pictures/photo.png'), true)
+assert.equal(isImage('/pictures/photo.jpg.mp4'), false)
+const mixedMedia = [{ path: '/folder', isDirectory: true }, { path: '/clip.mp4', isDirectory: false }, { path: '/photo.PNG', isDirectory: false }]
+assert.deepEqual(filterMediaTypes(mixedMedia, true, true), mixedMedia)
+assert.deepEqual(filterMediaTypes(mixedMedia, true, false).map(entry => entry.path), ['/folder', '/clip.mp4'])
+assert.deepEqual(filterMediaTypes(mixedMedia, false, true).map(entry => entry.path), ['/folder', '/photo.PNG'])
+assert.deepEqual(filterMediaTypes(mixedMedia, false, false).map(entry => entry.path), ['/folder'])
+const { filterMedia, visibleSelection, parentPath, sameParent, shownFilePaths } = await loadTypeScript('../src/mediaFilter.ts')
+assert.deepEqual(shownFilePaths(mixedMedia), ['/clip.mp4', '/photo.PNG'])
+assert.deepEqual(shownFilePaths(filterMediaTypes(mixedMedia, false, true)), ['/photo.PNG'])
+assert.deepEqual(shownFilePaths(filterMediaTypes(mixedMedia, false, false)), [])
 assert.equal(parentPath('C:\\clips\\first.mp4'), 'C:\\clips')
 assert.equal(parentPath('C:\\first.mp4'), 'C:\\')
 assert.equal(parentPath('/first.mp4'), '/')
 assert.equal(parentPath('/clips/first.mp4'), '/clips')
 assert.equal(sameParent(['C:\\clips\\first.mp4', 'C:\\clips\\second.mp4']), true)
 assert.equal(sameParent(['/clips/first.mp4', '/other/first.mp4']), false)
+const { folderResults } = await loadTypeScript('../src/mediaResults.ts')
+const { prepareTrash, executeTrash, folderTrashResult } = await loadTypeScript('../src/trashWorkflow.ts')
+const { nextSelection } = await loadTypeScript('../src/mediaSelection.ts')
+const disposableMedia = [
+  { name: 'Folder', path: '/media/folder', isDirectory: true, size: null, modifiedAt: null },
+  { name: 'Today image', path: '/media/today.jpg', isDirectory: false, size: 1, modifiedAt: todayBounds.from + 1000, createdAt: todayBounds.from, videoId: 1 },
+  { name: 'Today video', path: '/media/today.mp4', isDirectory: false, size: 1, modifiedAt: todayBounds.from + 2000, createdAt: todayBounds.from, videoId: 2 },
+  { name: 'Yesterday image', path: '/media/yesterday.png', isDirectory: false, size: 1, modifiedAt: todayBounds.from - 1000, createdAt: todayBounds.from - 1000, videoId: 3 },
+]
+const workflowFilters = { showVideos: true, showImages: true, dates: todayBounds, tagActive: false, matchingIds: [], sort: 'name', direction: 'asc' }
+const visibleToday = folderResults(disposableMedia, workflowFilters)
+assert.deepEqual(shownFilePaths(folderResults(disposableMedia, { ...workflowFilters, showVideos: false, tagActive: true, matchingIds: [1, 3] })), ['/media/today.jpg'])
+const selectedToday = shownFilePaths(visibleToday)
+assert.deepEqual(selectedToday, ['/media/today.jpg', '/media/today.mp4'])
+const planOptions = { file: visibleToday.find(entry => !entry.isDirectory), selectedPaths: selectedToday, entries: visibleToday, ready: true, root: '/media', dates: todayBounds, dateState: { ...emptyDateFilter, preset: 'today' }, showVideos: true, showImages: true }
+const trashRequest = prepareTrash(planOptions)
+const disk = new Set(disposableMedia.map(entry => entry.path))
+const recycled = []
+let started = false
+const completed = await executeTrash(trashRequest, {
+  confirm: async request => { assert.match(request.message, /today/); assert.match(request.message, /Selected file dates/); return true },
+  beforeMove: () => { started = true },
+  move: async request => {
+    assert.equal(started, true)
+    assert.deepEqual(request.filter.date, { field: 'modified', from: todayBounds.from, to: todayBounds.to })
+    for (const path of request.paths) { disk.delete(path); recycled.push(path) }
+    return { listing: { path: '/media', parent: null, entries: disposableMedia.filter(entry => disk.has(entry.path)) }, movedCount: request.paths.length, error: null }
+  },
+})
+assert.equal(completed.status, 'completed')
+assert.deepEqual(recycled, selectedToday)
+assert.equal(disk.has('/media/yesterday.png'), true)
+assert.equal(disk.has('/media/folder'), true)
+assert.equal(folderResults(completed.result.listing.entries, workflowFilters).filter(entry => !entry.isDirectory).length, 0)
+assert.equal(folderResults(completed.result.listing.entries, { ...workflowFilters, dates: dateBounds({ ...emptyDateFilter, preset: 'yesterday' }, testNow) }).filter(entry => !entry.isDirectory).length, 1)
+assert.throws(() => prepareTrash({ ...planOptions, selectedPaths: [...selectedToday, '/media/yesterday.png'] }), /no longer matches/)
+assert.throws(() => prepareTrash({ ...planOptions, ready: false }), /no longer matches/)
+assert.equal((await executeTrash(trashRequest, { confirm: async () => false, beforeMove: () => assert.fail('Cancelled request started deletion'), move: async () => assert.fail('Cancelled request deleted files') })).status, 'cancelled')
+selectedToday.push('/media/yesterday.png')
+assert.deepEqual(trashRequest.paths, ['/media/today.jpg', '/media/today.mp4'])
+const remainingAfterPartial = folderTrashResult(disposableMedia.slice(2), trashRequest.paths, '/media/today.jpg', visibleToday, 'One file failed')
+assert.deepEqual(remainingAfterPartial.remaining.map(entry => entry.path), ['/media/today.mp4'])
+assert.equal(remainingAfterPartial.nearby.path, '/media/today.mp4')
+const rangeSelection = nextSelection(visibleToday, [], '/media/today.jpg', visibleToday[2], 2, { shiftKey: true, ctrlKey: false, metaKey: false })
+assert.deepEqual(rangeSelection.paths, ['/media/today.jpg', '/media/today.mp4'])
+const toggled = nextSelection(visibleToday, rangeSelection.paths, rangeSelection.anchor, visibleToday[1], 1, { shiftKey: false, ctrlKey: true, metaKey: false })
+assert.deepEqual(toggled.paths, ['/media/today.mp4'])
 const filterEntries = [
   { path: 'folder', isDirectory: true },
   { path: 'first.mp4', isDirectory: false, videoId: 1 },
