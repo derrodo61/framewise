@@ -187,7 +187,8 @@ export function extractGenerationMetadata(probe: ProbeMetadata): GenerationMetad
     // Some writers store workflow and execution graph in separate tags.
     const separateWorkflow = Object.entries(scope!).find(([key]) => key.toLowerCase() === 'workflow')?.[1]
     for (const [originalKey, raw] of Object.entries(scope!)) {
-      const key = originalKey.toLowerCase()
+      const lowerKey = originalKey.toLowerCase()
+      const key = /^(?:exif[:.])?user[_ ]?comment$/.test(lowerKey) ? 'comment' : lowerKey
       if (/^(seed|noise_seed)$/.test(key)) {
         candidate = true; addSeed(result, 'other', raw, originalKey); continue
       }

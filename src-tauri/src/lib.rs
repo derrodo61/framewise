@@ -15,6 +15,7 @@ mod workspace_search;
 mod media_filters;
 mod trash_media;
 mod png_metadata;
+mod image_exif;
 mod ratings;
 #[cfg(desktop)]
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
@@ -267,14 +268,18 @@ fn inspect_video_file(resolved: &Path) -> Result<serde_json::Value, String> {
         log::error!("ffprobe failed: {}", details.trim());
         return Err(format!("Could not inspect video: {}", details.trim()));
     }
-    let result = serde_json::from_slice(&output.stdout).map_err(|error| {
+    let result: Result<serde_json::Value, String> = serde_json::from_slice(&output.stdout).map_err(|error| {
         log::error!("ffprobe returned invalid JSON: {error}");
         format!("Invalid ffprobe output: {error}")
     });
     if started.elapsed().as_millis() > 250 {
         log::info!("Slow metadata read: {} ms, video={}", started.elapsed().as_millis(), resolved.display());
     }
-    result
+    let mut result = result?;
+    if image_file(resolved) && let Err(error) = image_exif::enrich(resolved, &mut result) {
+        log::warn!("Image EXIF metadata could not be read for {}: {error}", resolved.display());
+    }
+    Ok(result)
 }
 
 pub(crate) fn media_command(program: impl AsRef<std::ffi::OsStr>) -> Command {

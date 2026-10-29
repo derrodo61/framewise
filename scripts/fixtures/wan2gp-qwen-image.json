@@ -1,0 +1,7 @@
+{
+  "format": {
+    "tags": {
+      "UserComment": "{\"image_mode\": 1, \"prompt\": \"A red sailboat on a calm lake.\", \"negative_prompt\": \"Blurry\", \"seed\": 18446744073709551615, \"model_type\": \"qwen_image_21_7B\", \"type\": \"WanGP v18.84 by DeepBeepMeep - Qwen Image 2.1 TextImage2Image 7B\"}"
+    }
+  }
+}

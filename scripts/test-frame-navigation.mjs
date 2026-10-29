@@ -317,4 +317,18 @@ const ratingTrashRequest = prepareTrash({ ...planOptions, file: unratedVideos.fi
 assert.deepEqual(ratingTrashRequest.paths, ['/media/today.mp4'])
 assert.equal(ratingTrashRequest.filter.rating.mode, 'unrated')
 
+
+
+// WAN2GP image output uses JSON in EXIF UserComment, not PNG text tags.
+const qwenImage = JSON.parse(await readFile(new URL('fixtures/wan2gp-qwen-image.json', import.meta.url), 'utf8'))
+const qwenMetadata = extractGenerationMetadata(qwenImage)
+assert.equal(qwenMetadata.format, 'WAN2GP')
+assert.deepEqual(qwenMetadata.prompts.map(prompt => [prompt.kind, prompt.text]), [['positive', 'A red sailboat on a calm lake.'], ['negative', 'Blurry']])
+assert.deepEqual(qwenMetadata.seeds.map(seed => seed.value), ['18446744073709551615'])
+assert.deepEqual(qwenMetadata.warnings, [])
+for (const key of ['user_comment', 'EXIF:UserComment', 'User Comment']) {
+  assert.deepEqual(extractGenerationMetadata({ format: { tags: { [key]: qwenImage.format.tags.UserComment } } }).prompts.map(prompt => prompt.text), ['A red sailboat on a calm lake.', 'Blurry'])
+}
+assert.equal(extractGenerationMetadata({ format: { tags: { UserComment: '{broken JSON' } } }).prompts.length, 0)
+assert.equal(extractGenerationMetadata({ format: { tags: {} } }).format, null)
 console.log('Media navigation, filters, ratings, Trash workflow, and generation metadata tests passed')
