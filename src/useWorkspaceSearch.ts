@@ -65,6 +65,17 @@ export function useWorkspaceSearch({ root, enabled, tagIds, matchAll, sort, desc
     page: ready ? result?.data?.page ?? page : page,
     ready, scan: currentScan, scanError: scanError?.root === root ? scanError.message : null,
     error: ready ? result?.error : null,
+    imagePaths: async (): Promise<string[]> => {
+      if (!root) throw new Error('Choose a workspace first.')
+      const paths: string[] = []
+      for (let imagePage = 0; ; imagePage++) {
+        const result = await invoke<Page>('search_workspace', { query: { expectedRoot: root, tagIds, matchAll, sort, descending, page: imagePage, showVideos: false, showImages: true, rating: { mode: rating.mode, value: rating.value }, dateRange: { field: dates.field, from: dates.from, to: dates.to } } })
+        if (result.total > 100_000) throw new Error('Narrow the filters to 100,000 images or fewer before opening the viewer.')
+        paths.push(...result.entries.map(entry => entry.path))
+        if (paths.length >= result.total || !result.entries.length || result.page !== imagePage) break
+      }
+      return [...new Set(paths)]
+    },
     setPage: (page: number) => setPageState({ key: filterKey, page }),
     rescan: () => setRestart(value => value + 1),
     cancel: () => { if (currentScan) void invoke('cancel_workspace_scan', { scanId: currentScan.id }).catch(cause => setScanError({ root: root!, message: String(cause) })) },

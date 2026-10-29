@@ -5,6 +5,7 @@ import { error as logError } from '@tauri-apps/plugin-log'
 import './index.css'
 import App from './App.tsx'
 import MoveWindow from './MoveWindow.tsx'
+import ImageViewer from './ImageViewer.tsx'
 import { getPreference, initializePreferences } from './preferences'
 
 function logUnhandled(message: string) {
@@ -15,9 +16,11 @@ window.addEventListener('error', event => logUnhandled(`Uncaught UI error: ${eve
 window.addEventListener('unhandledrejection', event => logUnhandled(`Unhandled UI promise rejection: ${String(event.reason)}`))
 
 const isMoveWindow = new URLSearchParams(window.location.search).has('moveTo')
-void initializePreferences(!isMoveWindow).then(() => {
+const isImageViewer = new URLSearchParams(window.location.search).has('imageViewer')
+if (isImageViewer) document.body.classList.add('image-viewer-body')
+void initializePreferences(!isMoveWindow && !isImageViewer).then(() => {
   document.documentElement.dataset.theme = getPreference('framewise.theme') === 'dark' ? 'dark' : 'light'
   createRoot(document.getElementById('root')!).render(
-    <StrictMode>{isMoveWindow ? <MoveWindow /> : <App />}</StrictMode>,
+    <StrictMode>{isImageViewer ? <ImageViewer /> : isMoveWindow ? <MoveWindow /> : <App />}</StrictMode>,
   )
 })

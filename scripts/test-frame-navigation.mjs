@@ -331,4 +331,28 @@ for (const key of ['user_comment', 'EXIF:UserComment', 'User Comment']) {
 }
 assert.equal(extractGenerationMetadata({ format: { tags: { UserComment: '{broken JSON' } } }).prompts.length, 0)
 assert.equal(extractGenerationMetadata({ format: { tags: {} } }).format, null)
-console.log('Media navigation, filters, ratings, Trash workflow, and generation metadata tests passed')
+
+
+const { fitImage, clampImage, zoomImage, adjacentImage } = await loadTypeScript('../src/imageViewerGeometry.ts')
+// Both portrait and landscape images fit completely, without stretching or cropping.
+for (const image of [{ width: 704, height: 1280 }, { width: 3840, height: 2160 }]) {
+  const viewport = { width: 1200, height: 700 }
+  const fit = fitImage(image, viewport)
+  assert.ok(image.width * fit.scale <= viewport.width - 32)
+  assert.ok(image.height * fit.scale <= viewport.height - 32)
+  assert.deepEqual(fit.offset, { x: 0, y: 0 })
+}
+const largeImage = { width: 4000, height: 3000 }
+const viewerViewport = { width: 1000, height: 800 }
+assert.deepEqual(fitImage({ width: 16, height: 16 }, viewerViewport), { scale: 1, offset: { x: 0, y: 0 } })
+const anchoredZoom = zoomImage({ scale: 1, offset: { x: 100, y: 30 } }, 2, { x: 200, y: 100 }, largeImage, viewerViewport)
+assert.deepEqual(anchoredZoom, { scale: 2, offset: { x: 0, y: -40 } })
+assert.deepEqual(clampImage({ scale: 1, offset: { x: 9000, y: -9000 } }, largeImage, viewerViewport).offset, { x: 1500, y: -1100 })
+assert.deepEqual(clampImage({ scale: 1, offset: { x: 50, y: -50 } }, { width: 16, height: 16 }, viewerViewport).offset, { x: 0, y: 0 })
+assert.equal(zoomImage({ scale: 1, offset: { x: 0, y: 0 } }, 999, { x: 0, y: 0 }, largeImage, viewerViewport).scale, 16)
+assert.ok(zoomImage(fitImage(largeImage, viewerViewport), 0, { x: 0, y: 0 }, largeImage, viewerViewport).scale > 0)
+assert.equal(adjacentImage(0, 3, -1), 0)
+assert.equal(adjacentImage(2, 3, 1), 2)
+assert.equal(adjacentImage(1, 3, -1), 0)
+assert.equal(adjacentImage(0, 3, 1), 1)
+console.log('Media navigation, filters, ratings, Trash workflow, generation metadata and image viewer geometry tests passed')

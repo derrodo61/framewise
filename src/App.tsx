@@ -247,6 +247,8 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [copyDone, setCopyDone] = useState(false)
   const [editingFile, setEditingFile] = useState<FileEntry | null>(null)
+  const [openingImageViewer, setOpeningImageViewer] = useState(false)
+  const imageViewerOpening = useRef(false)
   const [contextMenu, setContextMenu] = useState<{ file: FileEntry; x: number; y: number } | null>(null)
   const [tagBatch, setTagBatch] = useState<NamedTagVideo[] | null>(null)
   const [ratingBatch, setRatingBatch] = useState<(NamedTagVideo & { rating?: number | null })[] | null>(null)
@@ -640,6 +642,23 @@ function App() {
     return () => { active = false; unlisten?.() }
   }, [])
 
+  const refreshViewerTrash = useEffectEvent(({ path, name, warning }: { path: string; name: string; warning: string | null }) => {
+    setListing(previous => previous ? { ...previous, entries: previous.entries.filter(entry => entry.path !== path) } : previous)
+    setSelectedPaths(previous => previous.filter(selectedPath => selectedPath !== path))
+    if (selected?.path === path) { inspectSelection(undefined, true); setPlaybackRequest(null) }
+    if (contextMenu?.file.path === path) setContextMenu(null)
+    setTagRevision(value => value + 1)
+    setFileAction({ message: `Moved “${name}” to Trash.${warning ? ` ${warning}` : ''}`, error: !!warning })
+  })
+  useEffect(() => {
+    let active = true
+    let unlisten: (() => void) | undefined
+    void listen<{ path: string; name: string; warning: string | null }>('framewise:image-trashed', event => { if (active) refreshViewerTrash(event.payload) })
+      .then(stop => { if (active) unlisten = stop; else stop() })
+      .catch(cause => reportError('Listening for image viewer deletions', cause))
+    return () => { active = false; unlisten?.() }
+  }, [])
+
   function openFileMenu(file: FileEntry, x: number, y: number) {
     if (deleting || duplicatingFile || renaming || renameTarget) return
     if (!selectedPaths.includes(file.path)) { selectionAnchor.current = file.path; inspectSelection(file) }
@@ -704,6 +723,24 @@ function App() {
       setPreference('framewise.inspectorCollapsed', 'false')
     }
     if (!isImage(entry.path)) setPlaybackRequest({ path: entry.path, action })
+  }
+
+  async function openImageViewer(file: FileEntry) {
+    if (imageViewerOpening.current || !isImage(file.path) || !resultsReady) return
+    imageViewerOpening.current = true
+    setOpeningImageViewer(true)
+    try {
+      const paths = workspace ? await workspaceSearch.imagePaths() : mediaEntries.filter(entry => !entry.isDirectory && isImage(entry.path)).map(entry => entry.path)
+      await invoke('begin_image_viewer', { paths, selected: file.path })
+      const existing = await WebviewWindow.getByLabel('image-viewer')
+      if (existing) await existing.setFocus()
+      else await new Promise<void>((resolve, reject) => {
+        const viewer = new WebviewWindow('image-viewer', { url: 'index.html?imageViewer=1', title: 'Image viewer — Framewise', width: 1100, height: 800, minWidth: 480, minHeight: 360, maximized: true })
+        void viewer.once('tauri://created', () => resolve()).catch(reject)
+        void viewer.once('tauri://error', event => reject(new Error(String(event.payload)))).catch(reject)
+      })
+    } catch (cause) { setFileAction({ message: reportError('Opening image viewer', cause), error: true }) }
+    finally { imageViewerOpening.current = false; setOpeningImageViewer(false) }
   }
 
   async function openMoveWindow(file: FileEntry) {
@@ -1070,7 +1107,7 @@ function App() {
           </div>
           <div ref={fileListRef} className={`file-list ${mediaView === 'grid' ? `media-grid grid-size-${gridSize}` : ''}`} role="group" aria-label="Files and folders" onKeyDown={navigateFiles}>
             {!workspace && listing.parent && <button className="file-row back-row" data-list-row="true" data-entry-index="-1" data-path={listing.parent} onClick={() => browse(listing.parent!, { path: listing.path })}><span className="file-icon"><Icon name="arrow" size={18} /></span><span className="file-name">Go back</span></button>}
-            {mediaEntries.map((entry, index) => <button key={entry.path} data-list-row="true" data-entry-index={index} data-path={entry.path} aria-pressed={selectedPaths.includes(entry.path)} className={`file-row ${selectedPaths.includes(entry.path) ? 'selected' : ''}`} onClick={event => selectMediaEntry(entry, index, event)} onDoubleClick={() => playMediaEntry(entry)} onContextMenu={event => fileContextMenu(event, entry)}>
+            {mediaEntries.map((entry, index) => <button key={entry.path} data-list-row="true" data-entry-index={index} data-path={entry.path} aria-pressed={selectedPaths.includes(entry.path)} className={`file-row ${selectedPaths.includes(entry.path) ? 'selected' : ''}`} onClick={event => selectMediaEntry(entry, index, event)} onDoubleClick={() => { if (!entry.isDirectory && isImage(entry.path)) void openImageViewer(entry); else playMediaEntry(entry) }} onContextMenu={event => fileContextMenu(event, entry)}>
               {mediaView === 'grid' && !entry.isDirectory
                 ? isImage(entry.path) ? <ImagePreview path={entry.path} revision={workspace ? workspaceSearch.thumbnailRevision : listing} thumbnail /> : <MediaThumbnail path={entry.path} revision={workspace ? workspaceSearch.thumbnailRevision : listing} placeholder={<Icon name="film" size={32} />} />
                 : <span className={`file-icon ${entry.isDirectory ? 'folder-icon' : 'video-icon'}`}><Icon name={entry.isDirectory ? 'folder' : isImage(entry.path) ? 'image' : 'film'} size={mediaView === 'grid' ? 32 : 19} /></span>}
@@ -1095,7 +1132,8 @@ function App() {
           <button className="panel-toggle inspector-toggle" onClick={toggleInspector} aria-label={inspectorCollapsed ? 'Expand inspector' : 'Collapse inspector'} aria-expanded={!inspectorCollapsed} title={inspectorCollapsed ? 'Expand inspector' : 'Collapse inspector'}><Icon name="chevron" size={17} /></button></div>
         </div>
         {!inspectorCollapsed && (selected && resultsReady && mediaEntries.some(entry => entry.path === selected.path) ? <div key={selected.path} className="details-body">
-          {selectedImage ? <ImagePreview path={selected.path} revision={selected} /> : <VideoPreview file={selected} playbackAction={playbackRequest?.path === selected.path ? playbackRequest.action : null} onPlayRequestHandled={() => setPlaybackRequest(null)} />}
+          {selectedImage ? <ImagePreview path={selected.path} revision={selected} onOpen={() => void openImageViewer(selected)} /> : <VideoPreview file={selected} playbackAction={playbackRequest?.path === selected.path ? playbackRequest.action : null} onPlayRequestHandled={() => setPlaybackRequest(null)} />}
+          {selectedImage && <button className="inspector-edit" disabled={openingImageViewer || !resultsReady} onClick={() => void openImageViewer(selected)}>{openingImageViewer ? 'Opening image viewer…' : 'Open image viewer'}</button>}
           <div className="selected-file"><span className="selected-file-icon"><Icon name={selectedImage ? 'image' : 'film'} size={27} /></span><div><strong title={selected.name}>{selected.name}</strong><span>{fileSize(selected.size)}</span></div></div>
           <dl className="property-list"><Property label="Modified" value={selected.modifiedAt === null ? 'Unavailable' : new Date(selected.modifiedAt).toLocaleString()} /><Property label="Created" value={selected.createdAt == null ? 'Unavailable' : new Date(selected.createdAt).toLocaleString()} /></dl>
           <div className="section-title">RATING</div>

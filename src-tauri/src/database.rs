@@ -152,7 +152,9 @@ pub(crate) mod tests {
     impl Fixture {
         pub fn new() -> Self {
             let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-            let folder = std::env::temp_dir().join(format!("framewise-catalog-{}-{stamp}", std::process::id()));
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let folder = std::env::temp_dir().join(format!("framewise-catalog-{}-{stamp}-{sequence}", std::process::id()));
             fs::create_dir(&folder).unwrap();
             let path = folder.join("framewise.db");
             Self { folder, path }
