@@ -1,9 +1,11 @@
 export type ExtractedPrompt = { kind: 'positive' | 'negative'; text: string; source: string }
+export type ExtractedModel = { name: string; filename: string | null; source: string }
 export type ExtractedSeed = { kind: 'video' | 'prompt' | 'other'; value: string; source: string }
 export type GenerationMetadata = {
   format: 'ComfyUI' | 'WAN2GP' | 'Unknown' | null
   prompts: ExtractedPrompt[]
   seeds: ExtractedSeed[]
+  models: ExtractedModel[]
   warnings: string[]
 }
 type RecordValue = Record<string, unknown>
@@ -57,6 +59,27 @@ function addSeed(result: GenerationMetadata, kind: ExtractedSeed['kind'], value:
   const text = typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? String(value)
     : typeof value === 'string' && /^\d+$/.test(value.trim()) ? BigInt(value.trim()).toString() : null
   if (text !== null && !result.seeds.some(seed => seed.kind === kind && seed.value === text && seed.source === source)) result.seeds.push({ kind, value: text, source })
+}
+
+function modelText(value: unknown): string | null { return typeof value === 'string' && value.trim() ? value.trim() : null }
+function modelFilename(value: unknown): string | null {
+  const text = modelText(value)
+  if (!text) return null
+  let path = text
+  if (/^https?:\/\//i.test(text)) {
+    try { path = new URL(text).pathname } catch { return null }
+    try { path = decodeURIComponent(path) } catch { /* Keep an undecodable filename readable. */ }
+  }
+  return path.replace(/\\/g, '/').split('/').filter(Boolean).at(-1) ?? null
+}
+function addModel(result: GenerationMetadata, name: string, filename: string | null, source: string) {
+  if (!result.models.some(model => model.name === name && model.filename === filename)) result.models.push({ name, filename, source })
+}
+function extractWanModel(payload: RecordValue, result: GenerationMetadata, source: string) {
+  const filename = modelFilename(payload.model_filename)
+  const description = typeof payload.type === 'string' ? payload.type.split(' - ').slice(1).join(' - ').trim() : ''
+  const name = description || modelText(payload.model_type) || filename
+  if (name) addModel(result, name, filename, `${source} → ${filename ? 'model_filename' : description ? 'type' : 'model_type'}`)
 }
 
 function extractComfy(nodes: Graph, result: GenerationMetadata, savedWorkflow: unknown) {
@@ -162,8 +185,32 @@ function extractComfy(nodes: Graph, result: GenerationMetadata, savedWorkflow: u
     for (const [name, input] of fields) textFrom(input, /negative/i.test(name) ? 'negative' : kind, label, depth + 1)
   }
 
+  function modelNameFrom(value: unknown, visited = new Set<string>()): string | null {
+    const text = modelText(value)
+    if (text) return text
+    const id = link(value, nodes)
+    if (!id || visited.has(id) || visited.size > 64 || (value as unknown[])[1] !== 0) return null
+    visited.add(id)
+    const node = nodes[id]
+    const branch = switchBranch(node)
+    if (branch) return branch.resolved ? modelNameFrom(branch.input, visited) : null
+    if (/^(PrimitiveNode|PrimitiveString(?:Multiline)?|Text)$/i.test(node.class_type)) return modelNameFrom(node.inputs.value ?? node.inputs.text ?? node.inputs.string, visited)
+    return null
+  }
+  const modelOutputs = new Set<string>()
+  for (const id of reachable) {
+    for (const input of Object.values(nodes[id].inputs)) {
+      const upstream = link(input, nodes)
+      if (upstream && (input as unknown[])[1] === 0) modelOutputs.add(upstream)
+    }
+  }
   for (const id of reachable) {
     const node = nodes[id]
+    if (modelOutputs.has(id) && /^(UNETLoader.*|CheckpointLoader.*|DiffusionModelLoader.*|WanVideoModelLoader.*)$/i.test(node.class_type)) {
+      const field = ['ckpt_name', 'unet_name', 'model_name', 'model'].find(field => Object.hasOwn(node.inputs, field))
+      const filename = field ? modelFilename(modelNameFrom(node.inputs[field])) : null
+      if (filename) addModel(result, filename, filename, `${node._meta?.title || node.class_type} (node ${id}) → ${field}`)
+    }
     // Only follow semantic prompt/conditioning inputs in the active output branch.
     for (const [name, input] of Object.entries(node.inputs)) {
       if (/^(seed|noise_seed)$/i.test(name)) {
@@ -178,7 +225,7 @@ function extractComfy(nodes: Graph, result: GenerationMetadata, savedWorkflow: u
 }
 
 export function extractGenerationMetadata(probe: ProbeMetadata): GenerationMetadata {
-  const result: GenerationMetadata = { format: null, prompts: [], seeds: [], warnings: [] }
+  const result: GenerationMetadata = { format: null, prompts: [], seeds: [], models: [], warnings: [] }
   const detected = new Set<'ComfyUI' | 'WAN2GP'>()
   let hasExecution = false
   const tags = [probe.format?.tags, ...(probe.streams ?? []).map(stream => stream.tags)].filter(Boolean)
@@ -207,6 +254,7 @@ export function extractGenerationMetadata(probe: ProbeMetadata): GenerationMetad
       if (record(payload) && (typeof payload.type === 'string' && /^Wan(?:2)?GP\b/i.test(payload.type))) {
         detected.add('WAN2GP')
         result.format = 'WAN2GP'
+        extractWanModel(payload, result, originalKey)
         addPrompt(result, 'positive', payload.prompt, `${originalKey} → prompt`)
         addPrompt(result, 'negative', payload.negative_prompt, `${originalKey} → negative_prompt`)
         for (const [field, value] of Object.entries(payload)) if (/^(seed|noise_seed)$/i.test(field)) addSeed(result, 'video', value, `${originalKey} → ${field}`)

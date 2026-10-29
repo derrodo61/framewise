@@ -355,4 +355,32 @@ assert.equal(adjacentImage(0, 3, -1), 0)
 assert.equal(adjacentImage(2, 3, 1), 2)
 assert.equal(adjacentImage(1, 3, -1), 0)
 assert.equal(adjacentImage(0, 3, 1), 1)
+
+
+// Generation models appear below prompts, using recorded names/files rather than guessing.
+const modelWanProbe = payload => ({ format: { tags: { UserComment: JSON.stringify(payload) } } })
+const modelWan = { type: 'WanGP v18.84 by DeepBeepMeep - Qwen Image 2.1 TextImage2Image 7B', model_type: 'qwen_image_21_7B', model_filename: 'https://huggingface.co/DeepBeepMeep/Qwen_image_2/resolve/main/qwen_image_21_7B_int8_convrot.safetensors?download=true', prompt: 'A sailboat.' }
+const modelResult = extractGenerationMetadata(modelWanProbe(modelWan))
+assert.equal(modelResult.models[0].name, 'Qwen Image 2.1 TextImage2Image 7B')
+assert.equal(modelResult.models[0].filename, 'qwen_image_21_7B_int8_convrot.safetensors')
+assert.equal(extractGenerationMetadata(modelWanProbe({ type: 'WanGP v1', model_type: 'qwen_image_21_7B' })).models[0].name, 'qwen_image_21_7B')
+assert.equal(extractGenerationMetadata(modelWanProbe({ type: 'WanGP v1', model_filename: 'C:\\models\\my model.safetensors' })).models[0].name, 'my model.safetensors')
+assert.deepEqual(extractGenerationMetadata(modelWanProbe({ type: 'WanGP v1', model_filename: {}, prompt: 'A sailboat.' })).models, [])
+const imageModelGraph = structuredClone(imageGraph)
+imageModelGraph['108'] = { class_type: 'LoraLoaderModelOnly', inputs: { lora_name: 'style.safetensors', model: ['loader', 0] } }
+imageModelGraph.loader = { class_type: 'UNETLoader', inputs: { unet_name: 'models/fluxtrait.safetensors' } }
+imageModelGraph['71'] = { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'text_encoder_only.safetensors' } }
+imageModelGraph['74'].inputs.clip = ['71', 1]
+imageModelGraph['67'].inputs.clip = ['71', 1]
+imageModelGraph.disconnected = { class_type: 'UNETLoader', inputs: { unet_name: 'unused.safetensors' } }
+assert.deepEqual(extractGenerationMetadata(comfyProbe(imageModelGraph)).models.map(model => model.name), ['fluxtrait.safetensors'])
+const modelSwitchGraph = structuredClone(imageModelGraph)
+modelSwitchGraph['108'].inputs.model = ['modelSwitch', 0]
+modelSwitchGraph.modelSwitch = { class_type: 'Switch any [Crystools]', inputs: { boolean: true, on_true: ['loader', 0], on_false: ['disconnected', 0] } }
+assert.deepEqual(extractGenerationMetadata(comfyProbe(modelSwitchGraph)).models.map(model => model.name), ['fluxtrait.safetensors'])
+const videoModelGraph = structuredClone(graphFixture)
+videoModelGraph.sample.inputs.model = ['checkpoint', 0]
+videoModelGraph.checkpoint = { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'video-model.safetensors' } }
+assert.equal(extractGenerationMetadata(comfyProbe(videoModelGraph)).models[0].name, 'video-model.safetensors')
+assert.deepEqual(extractGenerationMetadata({}).models, [])
 console.log('Media navigation, filters, ratings, Trash workflow, generation metadata and image viewer geometry tests passed')

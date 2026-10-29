@@ -12,3 +12,8 @@
 [data-theme="dark"] .generation-prompt-text pre { background: #151d29; border-color: #354359; }
 [data-theme="dark"] .generation-prompt-heading button { background: #284363; border-color: #435169; color: #a8caff; }
 [data-theme="dark"] .generation-warning, [data-theme="dark"] .generation-prompt-text > p { color: #e9bd7a; }
+
+.generation-model-value { margin: 8px 0; padding: 10px 12px; border: 1px solid #e0e7f0; border-radius: 7px; background: #f8fafc; color: #354358; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; user-select: text; }
+.generation-model-value > span { display: block; margin-top: 4px; font-size: 11px; color: #7b899d; }
+[data-theme="dark"] .generation-model-value { color: #d9e5f5; background: #151d29; border-color: #354359; }
+[data-theme="dark"] .generation-model-value > span { color: #a9b8ce; }

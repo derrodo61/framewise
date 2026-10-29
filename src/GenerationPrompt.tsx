@@ -42,6 +42,11 @@ export default function GenerationPrompt({ probe, image = false }: { probe: Para
       <div className="generation-format">Format: <strong>{metadata.format}</strong></div>
       {metadata.prompts.length ? metadata.prompts.map((prompt, index) => <PromptText key={`${prompt.kind}:${prompt.source}:${prompt.text}`} prompt={prompt} index={index} />)
         : <p className="no-data">{metadata.format === 'Unknown' ? 'Metadata found, but no supported prompt could be extracted.' : 'No prompt found in this metadata.'}</p>}
+      {metadata.models.length ? metadata.models.map(model => <div key={`${model.name}:${model.filename}`} className="generation-prompt-text generation-model">
+        <div className="generation-prompt-heading"><strong>{metadata.models.length > 1 ? 'Generation model' : 'Model'}</strong></div>
+        <div className="generation-model-value" tabIndex={0} aria-label="Generation model">{model.name}{model.filename && model.filename !== model.name && <span>{model.filename}</span>}</div>
+        <span className="generation-prompt-source">{model.source}</span>
+      </div>) : <p className="no-data">No model recorded in this metadata.</p>}
       {metadata.seeds.length ? metadata.seeds.map((seed, index) => <SeedValue key={`${seed.kind}:${seed.source}:${seed.value}`} seed={seed} index={index} image={image} />)
         : <p className="no-data">No seed recorded in this metadata.</p>}
       {metadata.warnings.map(message => <p key={message} className="generation-warning">{message}</p>)}
